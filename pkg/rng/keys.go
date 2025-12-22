@@ -4,6 +4,7 @@ const (
 	AddrPool = "addr_pool"
 	TxCount  = "tx_count"
 	Choose   = "choose_loop_vs_rand"
-	AddrPick = "addr_pick"
+	FromPick = "from_pick"
+	ToPick   = "to_pick"
 	Amount   = "amount"
 )

@@ -50,9 +50,9 @@ func (m *Miner) Run(ctx context.Context) error {
 			for i := 0; i < nTx; i++ {
 				p := m.rf.R(rng.Choose).Float64()
 				if p < 0.1 {
-					txs = append(txs, m.txgen.SelfLoopTx(bn, ts))
+					txs = append(txs, m.txgen.SelfLoopTx(bn, ts, i))
 				} else {
-					txs = append(txs, m.txgen.RandomTx(bn, ts))
+					txs = append(txs, m.txgen.RandomTx(bn, ts, i))
 				}
 			}
 
