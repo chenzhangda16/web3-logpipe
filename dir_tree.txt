@@ -62,8 +62,12 @@ web3-logpipe/
 │           └── app.go           # 把 fetcher + scheduler + workers + writer 串起来
 │
 ├── pkg/
-│   └── logx/
-│       └── logx.go              # 简单日志封装（带组件名前缀）
+│   ├── logx/
+│   │   └── logx.go              # 简单日志封装（带组件名前缀）
+│   │
+│   └── rng/
+│       ├── factory.go           # 随机数生成器
+│       └── keys.go              # key 常量（防止拼写创造新流）
 │
 ├── configs/
 │   ├── logpipe.dev.yaml         # 开发环境配置

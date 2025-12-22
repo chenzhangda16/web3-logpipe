@@ -4,24 +4,24 @@ import (
 	"crypto/sha1"
 	"encoding/hex"
 	"fmt"
-	"math/rand"
 
 	"github.com/chenzhangda16/web3-logpipe/internal/mockchain/model"
+	"github.com/chenzhangda16/web3-logpipe/pkg/rng"
 )
 
 type TxGen struct {
 	addrs []string
-	rng   *rand.Rand
+	rf    *rng.Factory
 }
 
-func NewTxGen(addrs []string, seed int64) *TxGen {
-	return &TxGen{addrs: addrs, rng: rand.New(rand.NewSource(seed))}
+func NewTxGen(addrs []string, rf *rng.Factory) *TxGen {
+	return &TxGen{addrs: addrs, rf: rf}
 }
 
 func (g *TxGen) RandomTx(blockNum, ts int64) model.Tx {
-	from := g.addrs[g.rng.Intn(len(g.addrs))]
-	to := g.addrs[g.rng.Intn(len(g.addrs))]
-	amt := 1 + g.rng.Int63n(1000)
+	from := g.addrs[g.rf.R(rng.AddrPick).Intn(len(g.addrs))]
+	to := g.addrs[g.rf.R(rng.AddrPick).Intn(len(g.addrs))]
+	amt := 1 + g.rf.R(rng.Amount).Int63n(1000)
 
 	return model.Tx{
 		Hash:      g.hash(from, to, blockNum, ts, amt),
@@ -35,8 +35,8 @@ func (g *TxGen) RandomTx(blockNum, ts int64) model.Tx {
 }
 
 func (g *TxGen) SelfLoopTx(blockNum, ts int64) model.Tx {
-	a := g.addrs[g.rng.Intn(len(g.addrs))]
-	amt := 1 + g.rng.Int63n(1000)
+	a := g.addrs[g.rf.R(rng.AddrPick).Intn(len(g.addrs))]
+	amt := 1 + g.rf.R(rng.Amount).Int63n(1000)
 	return model.Tx{
 		Hash:      g.hash(a, a, blockNum, ts, amt),
 		From:      a,

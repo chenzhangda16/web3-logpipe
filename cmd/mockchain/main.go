@@ -14,6 +14,7 @@ import (
 	"github.com/chenzhangda16/web3-logpipe/internal/mockchain/miner"
 	"github.com/chenzhangda16/web3-logpipe/internal/mockchain/rpc"
 	"github.com/chenzhangda16/web3-logpipe/internal/mockchain/store"
+	"github.com/chenzhangda16/web3-logpipe/pkg/rng"
 )
 
 func main() {
@@ -21,6 +22,7 @@ func main() {
 		dbPath    = flag.String("db", "./data/mockchain.db", "rocksdb path")
 		rpcAddr   = flag.String("rpc", ":8080", "rpc listen addr")
 		addrCount = flag.Int("addr", 5000, "address pool size")
+		det       = flag.Bool("det", false, "determine whether or not the chain is Reproducible")
 		seed      = flag.Int64("seed", 1, "seed for deterministic generation")
 		tick      = flag.Duration("tick", 1*time.Second, "block interval")
 	)
@@ -32,10 +34,13 @@ func main() {
 	}
 	defer st.Close()
 
-	addrs := generator.GenAddrs(*addrCount, *seed)
-	txgen := generator.NewTxGen(addrs, *seed+999)
+	// 随机化工厂初始化
+	rf := rng.New(map[bool]rng.Mode{true: rng.Deterministic, false: rng.Real}[*det], *seed)
 
-	m := miner.NewMiner(st, txgen, *tick)
+	addrs := generator.GenAddrs(*addrCount, rf.R(rng.AddrPool))
+	txgen := generator.NewTxGen(addrs, rf)
+
+	m := miner.NewMiner(st, txgen, rf, *tick)
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()

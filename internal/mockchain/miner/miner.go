@@ -7,17 +7,23 @@ import (
 	"github.com/chenzhangda16/web3-logpipe/internal/mockchain/generator"
 	"github.com/chenzhangda16/web3-logpipe/internal/mockchain/model"
 	"github.com/chenzhangda16/web3-logpipe/internal/mockchain/store"
+	"github.com/chenzhangda16/web3-logpipe/pkg/rng"
 )
 
 type Miner struct {
-	store   *store.RocksStore
-	txgen   *generator.TxGen
-	tick    time.Duration
-	startAt int64 // 可选：从 head+1 开始
+	store *store.RocksStore
+	txgen *generator.TxGen
+	rf    *rng.Factory
+	tick  time.Duration
 }
 
-func NewMiner(st *store.RocksStore, txgen *generator.TxGen, tick time.Duration) *Miner {
-	return &Miner{store: st, txgen: txgen, tick: tick}
+func NewMiner(st *store.RocksStore, txgen *generator.TxGen, rf *rng.Factory, tick time.Duration) *Miner {
+	return &Miner{
+		store: st,
+		txgen: txgen,
+		rf:    rf,
+		tick:  tick,
+	}
 }
 
 func (m *Miner) Run(ctx context.Context) error {
@@ -39,10 +45,10 @@ func (m *Miner) Run(ctx context.Context) error {
 			next++
 
 			ts := now.Unix()
-			nTx := 50 + m.txgenRngIntn(50) // 小技巧：下面实现避免暴露 rng
+			nTx := 50 + m.rf.R(rng.TxCount).Intn(50)
 			txs := make([]model.Tx, 0, nTx)
 			for i := 0; i < nTx; i++ {
-				p := m.txgenRngFloat64()
+				p := m.rf.R(rng.Choose).Float64()
 				if p < 0.1 {
 					txs = append(txs, m.txgen.SelfLoopTx(bn, ts))
 				} else {
@@ -60,14 +66,4 @@ func (m *Miner) Run(ctx context.Context) error {
 			}
 		}
 	}
-}
-
-// 下面两个方法是为了不让 Miner 直接碰 txgen.rng（你也可以直接把 rng 暴露出来，骨架阶段无所谓）
-func (m *Miner) txgenRngIntn(n int) int {
-	// 复用 txgen 的 RandomTx 会消耗 rng，不好；这里先简单点：用时间扰动不是你想要的。
-	// 更推荐：把 TxGen 里 rng 提供方法 Intn/Float64 或在 Miner 里单独放一个 rng。
-	return int(time.Now().UnixNano() % int64(n))
-}
-func (m *Miner) txgenRngFloat64() float64 {
-	return float64(time.Now().UnixNano()%1000) / 1000.0
 }
