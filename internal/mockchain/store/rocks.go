@@ -4,6 +4,8 @@ import (
 	"errors"
 	"strconv"
 
+	"github.com/chenzhangda16/web3-logpipe/internal/mockchain/hash"
+	"github.com/chenzhangda16/web3-logpipe/internal/mockchain/model"
 	"github.com/tecbot/gorocksdb"
 )
 
@@ -41,25 +43,45 @@ func (s *RocksStore) Close() {
 	}
 }
 
-func (s *RocksStore) Head() (int64, error) {
-	val, err := s.db.Get(s.ro, KeyHead())
+// HeadHash returns head hash. ok=false means empty DB.
+func (s *RocksStore) HeadHash() (hash.Hash32, bool, error) {
+	val, err := s.db.Get(s.ro, KeyHeadHash())
 	if err != nil {
-		return 0, err
+		return hash.Hash32{}, false, err
 	}
 	defer val.Free()
 
 	if !val.Exists() {
-		return 0, nil // 空库 head=0
+		return hash.Hash32{}, false, nil
+	}
+	h, err := hash.ByteSlice2Hash32(val.Data())
+	if err != nil {
+		return hash.Hash32{}, false, err
+	}
+	return h, true, nil
+}
+
+// HeadNum returns head num. ok=false means empty DB.
+func (s *RocksStore) HeadNum() (int64, bool, error) {
+	val, err := s.db.Get(s.ro, KeyHeadNum())
+	if err != nil {
+		return 0, false, err
+	}
+	defer val.Free()
+
+	if !val.Exists() {
+		return 0, false, nil
 	}
 	n, err := strconv.ParseInt(string(val.Data()), 10, 64)
 	if err != nil {
-		return 0, err
+		return 0, false, err
 	}
-	return n, nil
+	return n, true, nil
 }
 
-func (s *RocksStore) GetBlockRaw(n int64) ([]byte, error) {
-	val, err := s.db.Get(s.ro, KeyBlock(n))
+// GetBlockByHashRaw gets the block bytes by block hash.
+func (s *RocksStore) GetBlockByHashRaw(h hash.Hash32) ([]byte, error) {
+	val, err := s.db.Get(s.ro, KeyBlockHash(h))
 	if err != nil {
 		return nil, err
 	}
@@ -68,17 +90,43 @@ func (s *RocksStore) GetBlockRaw(n int64) ([]byte, error) {
 	if !val.Exists() {
 		return nil, errors.New("block not found")
 	}
-	// 注意：val.Data() 背后是 RocksDB 管理的内存，Free 后会失效，所以要 copy
-	b := append([]byte(nil), val.Data()...)
-	return b, nil
+	return append([]byte(nil), val.Data()...), nil
 }
 
-func (s *RocksStore) AppendBlock(blockNum int64, blockBytes []byte) error {
+// GetCanonicalBlockRaw gets canonical block at height n.
+func (s *RocksStore) GetCanonicalBlockRaw(n int64) ([]byte, error) {
+	val, err := s.db.Get(s.ro, KeyCanon(n))
+	if err != nil {
+		return nil, err
+	}
+	defer val.Free()
+	if !val.Exists() {
+		return nil, errors.New("canonical block not found")
+	}
+
+	h, err := hash.ByteSlice2Hash32(val.Data())
+	if err != nil {
+		return nil, err
+	}
+	return s.GetBlockByHashRaw(h)
+}
+
+// AppendCanonicalBlock writes block by hash and updates canonical + head.
+func (s *RocksStore) AppendCanonicalBlock(b model.Block, raw []byte) error {
 	wb := gorocksdb.NewWriteBatch()
 	defer wb.Destroy()
 
-	wb.Put(KeyBlock(blockNum), blockBytes)
-	wb.Put(KeyHead(), []byte(strconv.FormatInt(blockNum, 10)))
+	// 1) blockhash:{hash} -> raw
+	wb.Put(KeyBlockHash(b.Hash), raw)
+
+	// 2) canon:{number} -> hash
+	wb.Put(KeyCanon(b.Header.Number), b.Hash.Bytes())
+
+	// 3) meta:head_hash -> hash
+	wb.Put(KeyHeadHash(), b.Hash.Bytes())
+
+	// 4) meta:head_num -> number
+	wb.Put(KeyHeadNum(), []byte(strconv.FormatInt(b.Header.Number, 10)))
 
 	return s.db.Write(s.wo, wb)
 }

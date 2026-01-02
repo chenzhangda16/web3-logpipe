@@ -1,13 +1,24 @@
 package store
 
-import "fmt"
+import (
+	"strconv"
 
-const (
-	keyHead = "meta:head"
+	"github.com/chenzhangda16/web3-logpipe/internal/mockchain/hash"
 )
 
-func KeyHead() []byte { return []byte(keyHead) }
+const (
+	keyHeadHash = "meta:head_hash"
+	keyHeadNum  = "meta:head_num"
+)
 
-func KeyBlock(n int64) []byte {
-	return []byte(fmt.Sprintf("block:%020d", n)) // 固定宽度便于按字典序范围扫
+func KeyHeadHash() []byte { return []byte(keyHeadHash) }
+
+func KeyHeadNum() []byte { return []byte(keyHeadNum) }
+
+func KeyCanon(n int64) []byte {
+	return []byte("canon:" + strconv.FormatInt(n, 10))
+}
+
+func KeyBlockHash(h hash.Hash32) []byte {
+	return []byte("block_hash:" + h.Hex())
 }

@@ -17,10 +17,12 @@ import (
 	"github.com/chenzhangda16/web3-logpipe/pkg/rng"
 )
 
+const AddrPool = "addr_pool"
+
 func main() {
 	var (
 		dbPath    = flag.String("db", "./data/mockchain.db", "rocksdb path")
-		rpcAddr   = flag.String("rpc", ":8080", "rpc listen addr")
+		rpcAddr   = flag.String("rpc", ":18080", "rpc listen addr")
 		addrCount = flag.Int("addr", 5000, "address pool size")
 		det       = flag.Bool("det", false, "determine whether or not the chain is Reproducible")
 		seed      = flag.Int64("seed", 1, "seed for deterministic generation")
@@ -37,7 +39,7 @@ func main() {
 	// 随机化工厂初始化
 	rf := rng.New(map[bool]rng.Mode{true: rng.Deterministic, false: rng.Real}[*det], *seed)
 
-	addrs := generator.GenAddrs(*addrCount, rf.R(rng.AddrPool))
+	addrs := generator.GenAddrs(*addrCount, rf.R(AddrPool))
 	txgen := generator.NewTxGen(addrs, rf)
 
 	m := miner.NewMiner(st, txgen, rf, *tick)
@@ -45,7 +47,7 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	// 启动 Miner（单写）
+	// 启动 Miner（单写）假链区块入rocksdb
 	go func() {
 		if err := m.Run(ctx); err != nil && err != context.Canceled {
 			log.Printf("miner stopped: %v", err)

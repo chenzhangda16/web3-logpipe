@@ -28,7 +28,7 @@ func NewHTTPFetcher(url string) *HTTPFetcher {
 	}
 }
 
-func StartFetchLoop(ctx context.Context, out chan<- Tx) {
+func StartFetchLoop(ctx context.Context, out chan<- model.Tx) {
 	client := &http.Client{Timeout: 5 * time.Second}
 
 	go func() {
