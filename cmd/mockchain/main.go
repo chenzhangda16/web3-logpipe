@@ -24,9 +24,20 @@ func main() {
 		dbPath    = flag.String("db", "./data/mockchain.db", "rocksdb path")
 		rpcAddr   = flag.String("rpc", ":18080", "rpc listen addr")
 		addrCount = flag.Int("addr", 5000, "address pool size")
-		det       = flag.Bool("det", false, "determine whether or not the chain is Reproducible")
+		det       = flag.Bool("det", false, "determine whether or not the chain is reproducible")
 		seed      = flag.Int64("seed", 1, "seed for deterministic generation")
 		tick      = flag.Duration("tick", 1*time.Second, "block interval")
+
+		// backfill-sec:
+		//   >0 : warmup/backfill on startup (e.g. 86400 for 24h)
+		//   =0 : no strict window requirement, still can "catch up" if DecideTailAction says so
+		//   <0 : disable warmup/backfill entirely
+		backfillSec = flag.Int64("backfill-sec", 86400, "seconds to backfill on startup; -1 disables warmup/backfill")
+
+		// gap-sec:
+		//   defines contiguity: adjacent blocks with (ts[i+1]-ts[i])<=gap-sec are considered contiguous
+		//   if <=0, defaults to 3*tickSec (min 1)
+		gapSec = flag.Int64("gap-sec", 0, "contiguity gap threshold in seconds; <=0 means default=3*tickSec")
 	)
 	flag.Parse()
 
@@ -36,7 +47,7 @@ func main() {
 	}
 	defer st.Close()
 
-	// 随机化工厂初始化
+	// RNG factory
 	rf := rng.New(map[bool]rng.Mode{true: rng.Deterministic, false: rng.Real}[*det], *seed)
 
 	addrs := generator.GenAddrs(*addrCount, rf.R(AddrPool))
@@ -44,18 +55,30 @@ func main() {
 
 	m := miner.NewMiner(st, txgen, rf, *tick)
 
+	// --- Warmup / Backfill (sync) ---
+	if *backfillSec > 0 {
+		start := time.Now()
+		if err := m.Warmup(*backfillSec, *gapSec); err != nil {
+			log.Fatal(err)
+		}
+		log.Printf("warmup done: backfill=%ds gap=%ds tick=%s cost=%s.", *backfillSec, *gapSec, tick.String(), time.Since(start).String())
+	} else {
+		log.Printf("warmup disabled.")
+	}
+
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	// 启动 Miner（单写）假链区块入rocksdb
+	// Miner (single writer) keeps producing blocks
 	go func() {
+		// 用你实际存在的方法名：Run 或 RunBackup
 		if err := m.Run(ctx); err != nil && err != context.Canceled {
 			log.Printf("miner stopped: %v", err)
 			cancel()
 		}
 	}()
 
-	// 启动 RPC（只读）
+	// RPC server (read-only)
 	srv := &http.Server{
 		Addr:    *rpcAddr,
 		Handler: rpc.NewServer(st).Handler(),
@@ -63,7 +86,9 @@ func main() {
 
 	go func() {
 		<-ctx.Done()
-		_ = srv.Shutdown(context.Background())
+		c, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = srv.Shutdown(c)
 	}()
 
 	log.Printf("mockchain rpc listening on %s, db=%s", *rpcAddr, *dbPath)

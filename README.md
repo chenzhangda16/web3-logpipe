@@ -234,7 +234,7 @@ type App struct {
 }
 
 
-func (a *App) Run(ctx context.Context) error { ... }
+func (a *App) RunBackup(ctx context.Context) error { ... }
 
 ```
 
@@ -242,7 +242,7 @@ cmd/logpipe/main.go 只做三件事：
 
 1. 解析参数 / 读取配置
 2. 初始化 App
-3. 调 App.Run(ctx)
+3. 调 App.RunBackup(ctx)
    你以后要加 metrics、graceful shutdown、debug HTTP，一律丢 App 里做。
 ---
 
