@@ -10,6 +10,8 @@ import (
 	"syscall"
 	"time"
 
+	"golang.org/x/sync/errgroup"
+
 	"github.com/chenzhangda16/web3-logpipe/internal/mockchain/generator"
 	"github.com/chenzhangda16/web3-logpipe/internal/mockchain/miner"
 	"github.com/chenzhangda16/web3-logpipe/internal/mockchain/rpc"
@@ -66,33 +68,49 @@ func main() {
 		log.Printf("warmup disabled.")
 	}
 
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer cancel()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
-	// Miner (single writer) keeps producing blocks
-	go func() {
-		// 用你实际存在的方法名：Run 或 RunBackup
-		if err := m.Run(ctx); err != nil && err != context.Canceled {
-			log.Printf("miner stopped: %v", err)
-			cancel()
+	g, gctx := errgroup.WithContext(ctx)
+
+	// 1) miner
+	g.Go(func() error {
+		err := m.Run(gctx)
+		if err == context.Canceled {
+			return nil
 		}
-	}()
+		return err
+	})
 
-	// RPC server (read-only)
+	// 2) http server
 	srv := &http.Server{
 		Addr:    *rpcAddr,
 		Handler: rpc.NewServer(st).Handler(),
 	}
 
-	go func() {
-		<-ctx.Done()
-		c, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	// ListenAndServe 放进 errgroup
+	g.Go(func() error {
+		err := srv.ListenAndServe()
+		if err == http.ErrServerClosed {
+			return nil
+		}
+		return err
+	})
+
+	// 3) shutdown 协程：ctx cancel 后优雅关 server（带超时，防止卡死）
+	g.Go(func() error {
+		<-gctx.Done()
+
+		sdCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		_ = srv.Shutdown(c)
-	}()
+		_ = srv.Shutdown(sdCtx) // 忽略错误也行，按你口味
+
+		return nil
+	})
 
 	log.Printf("mockchain rpc listening on %s, db=%s", *rpcAddr, *dbPath)
-	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		log.Fatal(err)
+
+	if err := g.Wait(); err != nil {
+		log.Printf("exiting with error: %v", err)
 	}
 }

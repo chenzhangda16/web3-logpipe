@@ -44,9 +44,6 @@ func (c *FileCheckpoint) Load() (Ckpt, bool, error) {
 		return Ckpt{}, false, nil
 	}
 
-	// Compatible formats:
-	// 1) old: "<height>"
-	// 2) new: "<height>\n<hash>"
 	lines := strings.Split(s, "\n")
 	if len(lines) == 0 {
 		return Ckpt{}, false, nil
@@ -60,6 +57,8 @@ func (c *FileCheckpoint) Load() (Ckpt, bool, error) {
 	var hashStr string
 	if len(lines) >= 2 {
 		hashStr = strings.TrimSpace(lines[1])
+	} else {
+		return Ckpt{}, false, nil
 	}
 
 	return Ckpt{LastHeight: h, LastHash: hashStr}, true, nil

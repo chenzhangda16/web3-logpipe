@@ -18,6 +18,14 @@ type RPCClient struct {
 	hc   *http.Client
 }
 
+type BlocksRangeResp struct {
+	From    int64         `json:"from"`
+	To      int64         `json:"to"`
+	Blocks  []model.Block `json:"blocks"`
+	Partial bool          `json:"partial"`
+	LastOK  int64         `json:"last_ok"`
+}
+
 func NewRPCClient(base string) *RPCClient {
 	base = strings.TrimRight(base, "/")
 	return &RPCClient{
@@ -63,12 +71,6 @@ func (c *RPCClient) getJSON(ctx context.Context, path string, out any) error {
 	return json.NewDecoder(resp.Body).Decode(out)
 }
 
-func (c *RPCClient) Head(ctx context.Context) (HeadResp, error) {
-	var out HeadResp
-	err := c.getJSON(ctx, "/head", &out)
-	return out, err
-}
-
 func (c *RPCClient) ChainHead(ctx context.Context) (ChainHeadResp, error) {
 	var out ChainHeadResp
 	err := c.getJSON(ctx, "/chain/head", &out)
@@ -83,20 +85,15 @@ func (c *RPCClient) BlockAtOrAfter(ctx context.Context, ts int64) (AtOrAfterResp
 	return out, err
 }
 
-func (c *RPCClient) BlocksRange(ctx context.Context, from, to int64) ([]model.Block, error) {
-	type resp struct {
-		From   int64         `json:"from"`
-		To     int64         `json:"to"`
-		Blocks []model.Block `json:"blocks"`
-	}
-	var out resp
+func (c *RPCClient) BlocksRange(ctx context.Context, from, to int64) (BlocksRangeResp, error) {
+	var out BlocksRangeResp
 
 	q := url.Values{}
 	q.Set("from", strconv.FormatInt(from, 10))
 	q.Set("to", strconv.FormatInt(to, 10))
 
 	err := c.getJSON(ctx, "/blocks/range?"+q.Encode(), &out)
-	return out.Blocks, err
+	return out, err
 }
 
 func (c *RPCClient) BlockByNumber(ctx context.Context, n int64) (model.Block, error) {

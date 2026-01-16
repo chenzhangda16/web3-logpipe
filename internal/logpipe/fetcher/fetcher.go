@@ -105,7 +105,7 @@ func (f *Fetcher) Run(ctx context.Context) error {
 
 		// refresh head periodically
 		if time.Now().After(nextHeadPoll) {
-			h, err := f.rpc.Head(ctx)
+			h, err := f.rpc.ChainHead(ctx)
 			if err != nil {
 				log.Printf("[fetcher] head poll err: %v", err)
 			} else {
@@ -116,7 +116,7 @@ func (f *Fetcher) Run(ctx context.Context) error {
 
 		// if head unknown, try fetch once
 		if headNum == 0 {
-			h, err := f.rpc.Head(ctx)
+			h, err := f.rpc.ChainHead(ctx)
 			if err != nil {
 				log.Printf("[fetcher] head err: %v", err)
 				time.Sleep(f.cfg.IdleSleep)
@@ -135,75 +135,102 @@ func (f *Fetcher) Run(ctx context.Context) error {
 			to = headNum
 		}
 
-		blocks, err := f.rpc.BlocksRange(ctx, next, to)
+		rangeResp, err := f.rpc.BlocksRange(ctx, next, to)
 		if err != nil {
 			log.Printf("[fetcher] range err: from=%d to=%d err=%v", next, to, err)
 			time.Sleep(500 * time.Millisecond)
 			continue
 		}
+
+		blocks := rangeResp.Blocks
 		if len(blocks) == 0 {
-			// nothing returned; avoid tight loop
+			// If server says partial but returns nothing, don't advance.
+			// Backoff and retry; also refresh head soon.
+			if rangeResp.Partial {
+				log.Printf("[fetcher] range partial but empty: from=%d to=%d last_ok=%d", next, to, rangeResp.LastOK)
+			}
 			time.Sleep(f.cfg.IdleSleep)
 			continue
 		}
 
-		// produce blocks sequentially (keeps deterministic order)
+		// Produce blocks sequentially (keeps deterministic order)
+		lastProduced := int64(0)
 		for _, b := range blocks {
-			// safety: if server returned earlier blocks, skip
 			if b.Header.Number < next {
 				continue
 			}
-			// if server jumps ahead, we still advance by returned number
+			// If there is a gap in returned blocks, stop and retry from 'next'.
+			// This avoids silently skipping missing heights.
+			if b.Header.Number > next {
+				log.Printf("[fetcher] gap in server response: expected=%d got=%d (from=%d to=%d partial=%v last_ok=%d)",
+					next, b.Header.Number, rangeResp.From, rangeResp.To, rangeResp.Partial, rangeResp.LastOK)
+				break
+			}
+
 			if err := f.prod.ProduceBlock(ctx, b); err != nil {
 				log.Printf("[fetcher] produce err: height=%d err=%v", b.Header.Number, err)
-				// backoff and retry same block
 				time.Sleep(300 * time.Millisecond)
 				break
 			}
-			// checkpoint: last successfully produced block height
+
+			// checkpoint after each successful produce
 			if err := f.ckpt.Save(Ckpt{
 				LastHeight: b.Header.Number,
 				LastHash:   b.Hash.Hex(),
 			}); err != nil {
 				log.Printf("[fetcher] checkpoint save err: %v", err)
 			}
+
+			lastProduced = b.Header.Number
 			next = b.Header.Number + 1
+		}
+
+		// If server marked partial, we should be conservative:
+		// - If we produced up to lastProduced, continue from next (already advanced).
+		// - If we produced nothing, but server has last_ok >= next-1, we can advance to last_ok+1.
+		if rangeResp.Partial {
+			// produced nothing (e.g., decode ok but gap/produce error happened before first block)
+			if lastProduced == 0 {
+				if rangeResp.LastOK >= next {
+					// NOTE: next here is still the original 'next' because we didn't advance.
+					// To be safe, only advance if last_ok is at/after expected next.
+					log.Printf("[fetcher] partial advance by last_ok: next=%d last_ok=%d", next, rangeResp.LastOK)
+					next = rangeResp.LastOK + 1
+				} else {
+					// can't advance, retry
+					time.Sleep(200 * time.Millisecond)
+				}
+			}
+			// if produced some blocks, next already advanced; just continue
 		}
 	}
 }
 
 func (f *Fetcher) decideStartHeight(ctx context.Context) (int64, error) {
-	// A) checkpoint wins, but must be validated against chain canonical.
+	// A) checkpoint wins, but must be validated against canonical: (height, hash)
 	if ck, ok, err := f.ckpt.Load(); err != nil {
 		return 0, err
 	} else if ok && ck.LastHeight > 0 {
-		blk, err := f.rpc.BlockByNumber(ctx, ck.LastHeight)
-		if err == nil {
-			// If we have hash in checkpoint, validate it.
-			if ck.LastHash != "" {
+		if ck.LastHash == "" {
+			// strict: checkpoint without hash is treated as invalid
+			log.Printf("[fetcher] checkpoint missing hash -> cold start: last=%d", ck.LastHeight)
+		} else {
+			blk, err := f.rpc.BlockByNumber(ctx, ck.LastHeight)
+			if err == nil {
 				gotHash := blk.Hash.Hex()
-				if !equalHex(gotHash, ck.LastHash) {
-					// hash mismatch => chain rewritten/reorg/rebuild/trim
-					// degrade to cold start backfill
-					// (do not return error; self-heal)
-				} else {
-					// valid resume
+				if equalHex(gotHash, ck.LastHash) {
 					next := ck.LastHeight + 1
 					log.Printf("[fetcher] resume from checkpoint: last=%d hash=%s next=%d", ck.LastHeight, ck.LastHash, next)
 					return next, nil
 				}
+				log.Printf("[fetcher] checkpoint hash mismatch -> cold start: last=%d ckpt_hash=%s got_hash=%s",
+					ck.LastHeight, ck.LastHash, gotHash)
 			} else {
-				// old checkpoint format (height only) => accept by height existence
-				next := ck.LastHeight + 1
-				log.Printf("[fetcher] resume from checkpoint(height-only): last=%d next=%d", ck.LastHeight, next)
-				return next, nil
+				// block not found / rpc error -> cold start
+				log.Printf("[fetcher] checkpoint height not found or rpc error -> cold start: last=%d hash=%s err=%v",
+					ck.LastHeight, ck.LastHash, err)
 			}
-		} else {
-			// If block not found (likely 404), checkpoint invalid => cold start backfill.
-			// For other errors (RPC down), we can retry by falling through to ChainHead (also RPC).
 		}
-
-		log.Printf("[fetcher] checkpoint invalid or mismatched -> cold start: last=%d hash=%s", ck.LastHeight, ck.LastHash)
 	}
 
 	// B) no valid checkpoint: use head + backfill if enabled
@@ -228,7 +255,6 @@ func (f *Fetcher) decideStartHeight(ctx context.Context) (int64, error) {
 
 	pos, err := f.rpc.BlockAtOrAfter(ctx, targetTs)
 	if err != nil {
-		// fallback: start at 1
 		log.Printf("[fetcher] at-or-after failed -> fallback to 1: err=%v", err)
 		return 1, nil
 	}
