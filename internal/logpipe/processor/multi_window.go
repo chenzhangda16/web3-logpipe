@@ -1,11 +1,15 @@
 package processor
 
-import "sort"
+import (
+	"sort"
+
+	"github.com/chenzhangda16/web3-logpipe/internal/logpipe/event"
+)
 
 type WindowLike interface {
 	Name() string
 	WindowSec() int64
-	Add(e TxEvent)
+	Add(e event.TxEvent)
 	Evict(nowTs int64)
 	// optional: Snapshot/Report hooks
 }
@@ -37,7 +41,7 @@ func (mw *MultiWindow) Evict(nowTs int64) {
 	}
 }
 
-func (mw *MultiWindow) Add(e TxEvent) {
+func (mw *MultiWindow) Add(e event.TxEvent) {
 	for _, w := range mw.wins {
 		w.Add(e)
 	}

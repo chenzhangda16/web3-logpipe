@@ -18,10 +18,11 @@ func main() {
 		group   = flag.String("group", "logpipe-processor", "kafka consumer group")
 		topic   = flag.String("topic", "mockchain.blocks", "topic to consume blocks")
 
-		windowSec = flag.Int64("window-sec", 86400, "sliding window length in seconds")
-		gapSec    = flag.Int64("gap-sec", 3, "allowed timestamp gap in seconds (for monotonic guard)")
+		spoolPath    = flag.String("spool", "./data/spool.wal", "spool WAL path (ingest barrier)")
+		decodeWorker = flag.Int("decode-worker", 4, "number of decode workers")
+		decodeQueue  = flag.Int("decode-queue", 8192, "decode queue size")
 
-		ckptPath = flag.String("ckpt", "./data/processor.ckpt", "processor checkpoint path")
+		ckptPath = flag.String("ckpt", "./data/processor.ckpt", "processor checkpoint path (reserved)")
 	)
 	flag.Parse()
 
@@ -33,8 +34,9 @@ func main() {
 		Group:   *group,
 		Topic:   *topic,
 
-		WindowSec: *windowSec,
-		GapSec:    *gapSec,
+		SpoolPath:    *spoolPath,
+		DecodeWorker: *decodeWorker,
+		DecodeQueue:  *decodeQueue,
 
 		CheckpointPath: *ckptPath,
 	}
@@ -48,5 +50,6 @@ func main() {
 	if err := p.Run(ctx); err != nil && err != context.Canceled {
 		log.Fatal(err)
 	}
+
 	_ = time.Second
 }
