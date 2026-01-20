@@ -1,4 +1,4 @@
-package processor
+package dedup
 
 import (
 	"encoding/binary"
