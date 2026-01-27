@@ -1,7 +1,7 @@
 package ingest
 
 import (
-	"log"
+	"sync"
 
 	"github.com/chenzhangda16/web3-logpipe/internal/logpipe/event"
 	"github.com/chenzhangda16/web3-logpipe/internal/logpipe/ids"
@@ -26,47 +26,93 @@ func NewMockChainAdapter(addrs *ids.AddressID, tokens *ids.TokenID) *MockChainAd
 	}
 }
 
-// EmitTxEventsFromBlock：把协议 Block 翻译成分析 TxEvent。
-// emit 必须是 "Append 到 Dispatcher" 的函数；它会返回 seq（或不返回也行，看你实现）。
-func (a *MockChainAdapter) EmitTxEventsFromBlock(blk mc.Block, emit func(ev event.TxEvent) uint64) {
-	// 统一时间：建议用 blk.Header.Timestamp（你现在是 int64）
+func (a *MockChainAdapter) EmitTxEventsFromBlock(
+	blk mc.Block,
+	txRelativeIdx int64,
+	emit func(ev event.TxEvent, idx int64),
+	parts int, // <=1: linear; >1: chunk-parallel
+) {
 	blockTs := blk.Header.Timestamp
+	txs := blk.Txs
+	n := len(txs)
 
-	for _, tx := range blk.Txs {
-		body := tx.TxBody
+	// small blocks: no point parallelizing
+	if parts <= 1 || n < parts*2 {
+		a.emitRange(blockTs, txs, txRelativeIdx, 0, n, emit)
+		return
+	}
 
-		fromID, ok := a.Addrs.ID(body.From)
-		if !ok {
-			if a.DropBadAddr {
-				log.Printf("[ingest] drop tx: bad from addr=%q", body.From)
-				continue
-			}
-			fromID = 0
-		}
+	// chunk-parallel
+	chunk := (n + parts - 1) / parts
 
-		toID, ok := a.Addrs.ID(body.To)
-		if !ok {
-			if a.DropBadAddr {
-				log.Printf("[ingest] drop tx: bad to addr=%q", body.To)
-				continue
-			}
-			toID = 0
-		}
+	var wg sync.WaitGroup
+	wg.Add(parts)
 
-		tokenID := a.Tokens.ID(body.Token)
-		if tokenID == 0 && a.DropNoToken {
-			log.Printf("[ingest] drop tx: empty token")
+	for p := 0; p < parts; p++ {
+		start := p * chunk
+		end := start + chunk
+		if start >= n {
+			wg.Done()
 			continue
 		}
-
-		ev := event.TxEvent{
-			Ts:     blockTs,
-			From:   fromID,
-			To:     toID,
-			Token:  tokenID,
-			Amount: body.Amount,
+		if end > n {
+			end = n
 		}
 
-		_ = emit(ev) // seq 如需冷路径 meta，可用 emit 返回值
+		go func(start, end int) {
+			defer wg.Done()
+			a.emitRange(blockTs, txs, txRelativeIdx, start, end, emit)
+		}(start, end)
 	}
+
+	wg.Wait()
+}
+
+func (a *MockChainAdapter) emitRange(
+	blockTs int64,
+	txs []mc.Tx,
+	base int64,
+	start, end int,
+	emit func(ev event.TxEvent, idx int64),
+) {
+	for i := start; i < end; i++ {
+		ev, ok := a.txToEvent(blockTs, txs[i])
+		if !ok {
+			continue
+		}
+		emit(ev, base+int64(i))
+	}
+}
+
+func (a *MockChainAdapter) txToEvent(blockTs int64, tx mc.Tx) (event.TxEvent, bool) {
+	body := tx.TxBody
+
+	fromID, ok := a.Addrs.ID(body.From)
+	if !ok {
+		if a.DropBadAddr {
+			return event.TxEvent{}, false
+		}
+		fromID = 0
+	}
+
+	toID, ok := a.Addrs.ID(body.To)
+	if !ok {
+		if a.DropBadAddr {
+			return event.TxEvent{}, false
+		}
+		toID = 0
+	}
+
+	tokenID := a.Tokens.ID(body.Token)
+	if tokenID == 0 && a.DropNoToken {
+		return event.TxEvent{}, false
+	}
+
+	return event.TxEvent{
+		Ts:     blockTs,
+		From:   fromID,
+		To:     toID,
+		Token:  tokenID,
+		Amount: body.Amount,
+	}, true
 }

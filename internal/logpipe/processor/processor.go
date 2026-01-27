@@ -3,7 +3,12 @@ package processor
 import (
 	"context"
 	"log"
+	"strings"
 	"time"
+
+	"github.com/IBM/sarama"
+	"github.com/chenzhangda16/web3-logpipe/internal/logpipe/out"
+	"github.com/chenzhangda16/web3-logpipe/internal/logpipe/window"
 
 	"github.com/chenzhangda16/web3-logpipe/internal/logpipe/dispatcher"
 	"github.com/chenzhangda16/web3-logpipe/internal/logpipe/ids"
@@ -26,32 +31,45 @@ type Config struct {
 type Processor struct {
 	cfg Config
 
-	cons *Consumer
-
-	// 上游新组件
+	cons     *Consumer
+	client   sarama.Client
 	spool    ingest.Spool
 	disp     *dispatcher.Dispatcher
 	ingestor *ingest.Ingestor
+	wins     []*window.Runner
 }
 
 func New(cfg Config) (*Processor, error) {
-	cons, err := NewConsumer(cfg.Brokers, cfg.Group, cfg.Topic)
-	if err != nil {
-		return nil, err
-	}
-
 	sp, err := ingest.NewFileSpool(cfg.SpoolPath)
-	if err != nil {
-		_ = cons.Close()
-		return nil, err
-	}
 
-	disp := dispatcher.NewDispatcher(1024) // 先给个 cap
+	disp := dispatcher.NewDispatcher(16)
 	addrs := ids.NewAddressID(64, 1<<12)
 	tokens := ids.NewTokenID(32, 1<<10)
 	adapter := ingest.NewMockChainAdapter(addrs, tokens)
 
-	ig := ingest.NewIngestor(disp, sp, cfg.DecodeWorker, cfg.DecodeQueue, adapter)
+	client, err := sarama.NewClient(strings.Split(cfg.Brokers, ","), sarama.NewConfig())
+	if err != nil {
+		return nil, err
+	}
+
+	cons, err := NewConsumerWithClient(client, cfg.Group)
+	if err != nil {
+		_ = client.Close()
+		return nil, err
+	}
+
+	ig := ingest.NewIngestor(disp, sp, cfg.DecodeWorker, cfg.DecodeQueue, adapter, client, cfg.Topic)
+
+	sink, _ := out.NewKafkaSink([]string{"127.0.0.1:9092"}, "logpipe.out", sarama.NewConfig())
+
+	allOpen := false
+
+	wins := []*window.Runner{
+		window.NewRunner(0, disp, sink, &allOpen, false, &window.EmitTick{Every: 50}),
+		window.NewRunner(1, disp, sink, &allOpen, false, &window.EmitTick{Every: 200}),
+		window.NewRunner(2, disp, sink, &allOpen, false, &window.EmitTick{Every: 1000}),
+		window.NewRunner(3, disp, sink, &allOpen, true, &window.EmitTick{Every: 5000}),
+	}
 
 	return &Processor{
 		cfg:      cfg,
@@ -59,6 +77,7 @@ func New(cfg Config) (*Processor, error) {
 		spool:    sp,
 		disp:     disp,
 		ingestor: ig,
+		wins:     wins,
 	}, nil
 }
 
@@ -68,7 +87,17 @@ func (p *Processor) Close() error {
 }
 
 func (p *Processor) Run(ctx context.Context) error {
-	// ingestor 本身实现 sarama.ConsumerGroupHandler
+	// 1) 启动窗口实例（跟随 ctx 生命周期）
+	for _, w := range p.wins {
+		w := w
+		go func() {
+			if err := w.Run(ctx); err != nil {
+				log.Printf("[processor] window runner exit: %v", err)
+			}
+		}()
+	}
+
+	// 2) 启动 Kafka consume 主循环
 	for {
 		if err := p.cons.group.Consume(ctx, []string{p.cfg.Topic}, p.ingestor); err != nil {
 			log.Printf("[processor] consume err: %v", err)
