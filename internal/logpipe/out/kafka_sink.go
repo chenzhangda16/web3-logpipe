@@ -9,6 +9,11 @@ import (
 	"github.com/IBM/sarama"
 )
 
+type Sink interface {
+	Emit(ctx context.Context, typ string, v any) error
+	Close() error
+}
+
 type KafkaSink struct {
 	topic string
 	p     sarama.SyncProducer
@@ -18,7 +23,6 @@ func NewKafkaSink(brokers []string, topic string, cfg *sarama.Config) (*KafkaSin
 	if cfg == nil {
 		cfg = sarama.NewConfig()
 	}
-	// SyncProducer 需要 Return.Successes=true
 	cfg.Producer.Return.Successes = true
 	cfg.Producer.Return.Errors = true
 
@@ -37,7 +41,8 @@ func (s *KafkaSink) Close() error {
 }
 
 func (s *KafkaSink) Emit(ctx context.Context, typ string, v any) error {
-	// ctx 先不用强绑定（sarama 的 SyncProducer 不吃 ctx），但保留签名方便你未来统一 cancel
+	_ = ctx // SyncProducer 不吃 ctx，先留签名方便未来升级
+
 	data, err := json.Marshal(v)
 	if err != nil {
 		return err

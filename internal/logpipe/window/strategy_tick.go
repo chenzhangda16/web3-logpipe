@@ -20,12 +20,10 @@ func (s *EmitTick) OnMove(ctx context.Context, r *Runner, mv dispatcher.TxWinMar
 	if s.n%s.Every != 0 {
 		return nil
 	}
-
-	tick := out.WinTick{
+	return sink.Emit(ctx, "win_tick", out.WinTick{
 		WinIdx:  r.winIdx,
 		Head:    mv.TxHead,
 		Tail:    mv.TxTail,
 		OpenWin: mv.OpenWin,
-	}
-	return sink.Emit(ctx, "win_tick", tick)
+	})
 }

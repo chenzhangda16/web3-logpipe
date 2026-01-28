@@ -72,27 +72,3 @@ func (w *PGWriter) InsertWinTick(ctx context.Context, t out.WinTick) error {
 	)
 	return err
 }
-
-func (w *PGWriter) Run(ctx context.Context, in <-chan any) error {
-	// 最小实现：逐条写。后面你要 batch 再优化。
-	const ins = `INSERT INTO win_ticks(win_idx, head, tail, openwin) VALUES ($1,$2,$3,$4)`
-
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case v, ok := <-in:
-			if !ok {
-				return nil
-			}
-			switch x := v.(type) {
-			case out.WinTick:
-				if _, err := w.db.ExecContext(ctx, ins, x.WinIdx, x.Head, x.Tail, x.OpenWin); err != nil {
-					return err
-				}
-			default:
-				// 先忽略未知 out 类型；你后面加类型再扩展 switch
-			}
-		}
-	}
-}
