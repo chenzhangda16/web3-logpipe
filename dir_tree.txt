@@ -1,87 +1,90 @@
 web3-logpipe/
-├── go.mod
-├── go.sum
-├── README.md
-├── cmd/
-│   ├── mockchain/
-│   │   └── main.go          # 启动“假链节点”HTTP RPC 服务
-│   └── logpipe/
-│       └── main.go          # 启动多线程日志处理器（LogPipe）
-│
-├── internal/
-│   ├── mockchain/
-│   │   ├── model/
-│   │   │   ├── block.go             # Block / Tx（也可复用 logpipe/model）
-│   │   │   └── codec.go             # JSON/二进制编码（先 JSON）
-│   │   ├── store/
-│   │   │   ├── keys.go              # key 设计：meta/head, block/{n}
-│   │   │   └── rocks.go             # RocksDB 打开/关闭 + Get/Put + WriteBatch
-│   │   ├── generator/
-│   │   │   ├── addrs.go             # 地址池生成（seed 可复现）
-│   │   │   └── txgen.go             # 随机 tx + 环 tx（纯函数/无共享状态）
-│   │   ├── miner/
-│   │   │   └── miner.go             # Start(ctx): tick 出块 → store.AppendBlock()
-│   │   └── rpc/
-│   │       └── http.go              # GET /head, GET /block/{n} (只读)
-│   │
-│   └── logpipe/
-│       ├── model/
-│       │   ├── tx.go        # Tx、Block、EnrichedEvent 等基础结构
-│       │   └── flags.go     # 风险标记/行为标签枚举（WHale, Loop, etc）
-│       │
-│       ├── fetcher/
-│       │   └── http_fetcher.go  # 从 mockchain 拉 block → 展开成 Tx 流
-│       │
-│       ├── scheduler/
-│       │   └── scheduler.go     # Tx → shardID 的调度逻辑 (按地址/池分片)
-│       │
-│       ├── worker/
-│       │   ├── worker.go        # 单个 shard worker 的处理循环
-│       │   └── pipeline.go      # per-Tx 富化管线（规则调用、打标签）
-│       │
-│       ├── writer/
-│       │   ├── writer.go        # 从 shards 收集结果，批量写出
-│       │   └── postgres.go      # v1 先做 stub，后面再接 PostgreSQL/文件
-│       │
-│       ├── rules/
-│       │   ├── loop_detect.go   # 短环 / 自转 检测（先写简单版）
-│       │   ├── volume_window.go # 大额 & 短周期进出检测（滑动窗口）
-│       │   └── score.go         # 行为评分（RiskScore）
-│       │
-│       ├── state/
-│       │   ├── inmem_state.go   # 每 shard 的内存状态（per address / pool）
-│       │   └── wal.go           # v2/v3: WAL + checkpoint（先留空壳）
-│       │
-│       ├── config/
-│       │   └── config.go        # 配置结构体、加载（env / flag）
-│       │
-│       ├── metrics/
-│       │   └── metrics.go       # 内部指标（TPS、延迟、队列长度）
-│       │
-│       └── app/
-│           └── app.go           # 把 fetcher + scheduler + workers + writer 串起来
-│
-├── pkg/
-│   ├── logx/
-│   │   └── logx.go              # 简单日志封装（带组件名前缀）
-│   │
-│   └── rng/
-│       ├── factory.go           # 随机数生成器
-│       └── keys.go              # key 常量（防止拼写创造新流）
-│
-├── configs/
-│   ├── logpipe.dev.yaml         # 开发环境配置
-│   └── logpipe.local.yaml
-│
-├── scripts/
-│   ├── run_mockchain.sh         # 启动 mockchain
-│   ├── run_logpipe.sh           # 启动 logpipe
-│   └── bench_logpipe.sh         # 简单压测脚本（后面写）
-│
-├── testdata/
-│   ├── sample_block.json        # 预录制 block / tx 供单测用
-│   └── sample_events.json
-│
-└── internal_tests/
-    ├── logpipe_concurrency_test.go # go test -race 的并发压力测试
-    └── rules_test.go               # 行为检测规则的单测
+  cmd/
+    fetcher/
+      main.go
+    mockchain/
+      main.go
+    processor/
+      main.go
+    writer/
+      main.go
+  configs/
+    logpipe.dev.yaml
+    logpipe.local.yaml
+  data/
+    mockchain.db/
+      000006.log
+      CURRENT
+      IDENTITY
+      LOCK
+      LOG
+      LOG.old.1767100592421351
+      MANIFEST-000005
+      OPTIONS-000005
+      OPTIONS-000008
+  internal/
+    logpipe/
+      dispatcher/
+        dispatcher.go
+      event/
+        tx_event.go
+      fetcher/
+        checkpoint.go
+        fetcher.go
+        help.md
+        kafka_producer.go
+        rpc_client.go
+      ids/
+        address_id.go
+        token_id.go
+      ingest/
+        adapter_mockchain.go
+        ingestor.go
+        spool.go
+        spool.md
+      processor/
+        consumer.go
+        processor.go
+        window.go
+      window/
+        queue.go
+        runner.go
+        strategy.go
+        strategy_tick.go
+      writer/
+        pgwriter.go
+        schema.sql
+    mockchain/
+      generator/
+        addrs.go
+        txgen.go
+      hash/
+        hash32.go
+      miner/
+        miner.go
+      model/
+        block.go
+        codec.go
+        new.go
+      rpc/
+        http.go
+      store/
+        keys.go
+        rocks.go
+  internal_tests/
+    logpipe_concurrency_test.go
+    rules_test.go
+  pkg/
+    rng/
+      factory.go
+  scripts/
+    dev_run.sh
+  test/
+    tools/
+      kafka_consume/
+        main.go
+      kafka_produce/
+        main.go
+  go.mod
+  go.sum
+  README.md

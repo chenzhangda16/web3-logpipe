@@ -1,0 +1,21 @@
+# ===== runtime / data =====
+data/
+*.db
+*.log
+
+# ===== local config =====
+configs/*.local.yaml
+
+# ===== build artifacts =====
+bin/
+out/
+
+# ===== Go =====
+*.exe
+*.test
+*.out
+
+# ===== editor / os =====
+.idea/
+.vscode/
+.DS_Store
