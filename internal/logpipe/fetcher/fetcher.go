@@ -7,6 +7,8 @@ import (
 	"log"
 	"strings"
 	"time"
+
+	"github.com/chenzhangda16/web3-logpipe/internal/logpipe/retry"
 )
 
 type Config struct {
@@ -154,7 +156,7 @@ func (f *Fetcher) Run(ctx context.Context) error {
 		}
 
 		// Produce blocks sequentially (keeps deterministic order)
-		lastProduced := int64(0)
+		producedAny := false
 		for _, b := range blocks {
 			if b.Header.Number < next {
 				continue
@@ -167,7 +169,18 @@ func (f *Fetcher) Run(ctx context.Context) error {
 				break
 			}
 
-			if err := f.prod.ProduceBlock(ctx, b); err != nil {
+			if err := retry.Do(ctx, retry.Policy{
+				MaxAttempts: 5,
+				BaseDelay:   100 * time.Millisecond,
+				MaxDelay:    5 * time.Second,
+				Jitter:      100 * time.Millisecond,
+				OnRetry: func(attempt int, wait time.Duration, err error) {
+					log.Printf("[fetcher] produce retry: attempt=%d wait=%s err=%v", attempt, wait, err)
+				},
+				// Classify: 你后面可以按 sarama 错误类型细分；先 nil 也行（全都重试）
+			}, func(ctx context.Context) error {
+				return f.prod.ProduceBlock(ctx, b)
+			}); err != nil {
 				log.Printf("[fetcher] produce err: height=%d err=%v", b.Header.Number, err)
 				time.Sleep(300 * time.Millisecond)
 				break
@@ -181,7 +194,7 @@ func (f *Fetcher) Run(ctx context.Context) error {
 				log.Printf("[fetcher] checkpoint save err: %v", err)
 			}
 
-			lastProduced = b.Header.Number
+			producedAny = true
 			next = b.Header.Number + 1
 		}
 
@@ -190,7 +203,7 @@ func (f *Fetcher) Run(ctx context.Context) error {
 		// - If we produced nothing, but server has last_ok >= next-1, we can advance to last_ok+1.
 		if rangeResp.Partial {
 			// produced nothing (e.g., decode ok but gap/produce error happened before first block)
-			if lastProduced == 0 {
+			if !producedAny {
 				if rangeResp.LastOK >= next {
 					// NOTE: next here is still the original 'next' because we didn't advance.
 					// To be safe, only advance if last_ok is at/after expected next.
