@@ -13,6 +13,7 @@ import (
 )
 
 func main() {
+	log.SetFlags(log.Ldate | log.Ltime | log.Lmicroseconds | log.Lshortfile)
 	var (
 		// MockChain RPC base, e.g. http://127.0.0.1:18080
 		rpcBase = flag.String("rpc", "http://127.0.0.1:18080", "mockchain rpc base url")

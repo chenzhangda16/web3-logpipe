@@ -3,7 +3,7 @@ package store
 import (
 	"strconv"
 
-	"github.com/chenzhangda16/web3-logpipe/internal/mockchain/hash"
+	"github.com/chenzhangda16/web3-logpipe/pkg/hash"
 )
 
 const (

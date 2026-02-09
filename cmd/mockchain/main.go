@@ -22,6 +22,7 @@ import (
 const AddrPool = "addr_pool"
 
 func main() {
+	log.SetFlags(log.Ldate | log.Ltime | log.Lmicroseconds | log.Lshortfile)
 	var (
 		dbPath    = flag.String("db", "./data/mockchain.db", "rocksdb path")
 		rpcAddr   = flag.String("rpc", ":18080", "rpc listen addr")
@@ -42,6 +43,10 @@ func main() {
 		gapSec = flag.Int64("gap-sec", 0, "contiguity gap threshold in seconds; <=0 means default=3*tickSec")
 	)
 	flag.Parse()
+	log.Printf(
+		"[mockchain] start db=%s rpc=%s addr=%s tick=%s det=%v seed=%d backfill=%ds gap=%ds",
+		*dbPath, *rpcAddr, *addrCount, *tick, *det, *seed, *backfillSec, *gapSec,
+	)
 
 	st, err := store.Open(*dbPath)
 	if err != nil {

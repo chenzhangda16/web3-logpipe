@@ -13,6 +13,7 @@ import (
 )
 
 func main() {
+	log.SetFlags(log.Ldate | log.Ltime | log.Lmicroseconds | log.Lshortfile)
 	var (
 		brokers = flag.String("brokers", "127.0.0.1:9092", "kafka brokers csv")
 		group   = flag.String("group", "logpipe-processor", "kafka consumer group")

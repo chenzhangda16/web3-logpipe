@@ -1,7 +1,7 @@
 package model
 
 import (
-	"github.com/chenzhangda16/web3-logpipe/internal/mockchain/hash"
+	"github.com/chenzhangda16/web3-logpipe/pkg/hash"
 )
 
 type BlockHeader struct {

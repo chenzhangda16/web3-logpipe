@@ -37,12 +37,9 @@ func NewProducer(brokersCSV string, topic string) (*Producer, error) {
 	cfg.Producer.Return.Successes = true
 	cfg.Producer.Return.Errors = true
 
-	// If your Kafka cluster supports idempotent producer, keep it on.
-	// NOTE: idempotency may require additional constraints (max.in.flight, retries, acks).
-	// Sarama will validate some of these.
 	cfg.Producer.Idempotent = true
+	cfg.Net.MaxOpenRequests = 1
 
-	// If you know your Kafka version, set it explicitly to avoid negotiation issues.
 	cfg.Version = sarama.V2_1_0_0
 
 	sp, err := sarama.NewSyncProducer(brokers, cfg)

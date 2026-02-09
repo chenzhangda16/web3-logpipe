@@ -58,6 +58,22 @@ CREATE TABLE IF NOT EXISTS win_ticks (
   tail     bigint      NOT NULL,
   openwin  boolean     NOT NULL
 );
+
+-- Create UNIQUE constraint if not exists (compatible way)
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_constraint
+    WHERE conname = 'uq_win_ticks_win_idx_head_tail'
+  ) THEN
+    ALTER TABLE win_ticks
+      ADD CONSTRAINT uq_win_ticks_win_idx_head_tail
+      UNIQUE (win_idx, head, tail);
+  END IF;
+END
+$$;
+
 CREATE INDEX IF NOT EXISTS idx_win_ticks_ts ON win_ticks(ts);
 CREATE INDEX IF NOT EXISTS idx_win_ticks_win_idx_ts ON win_ticks(win_idx, ts);
 `
@@ -67,7 +83,11 @@ CREATE INDEX IF NOT EXISTS idx_win_ticks_win_idx_ts ON win_ticks(win_idx, ts);
 
 func (w *PGWriter) InsertWinTick(ctx context.Context, t out.WinTick) error {
 	_, err := w.db.ExecContext(ctx,
-		`INSERT INTO win_ticks(win_idx, head, tail, openwin) VALUES ($1,$2,$3,$4)`,
+		`INSERT INTO win_ticks(win_idx, head, tail, openwin)
+		 VALUES ($1,$2,$3,$4)
+		 ON CONFLICT (win_idx, head, tail) DO UPDATE
+		 SET openwin = EXCLUDED.openwin,
+		     ts = now()`,
 		t.WinIdx, t.Head, t.Tail, t.OpenWin,
 	)
 	return err

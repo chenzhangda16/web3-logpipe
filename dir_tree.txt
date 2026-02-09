@@ -12,16 +12,43 @@ web3-logpipe/
     logpipe.dev.yaml
     logpipe.local.yaml
   data/
+    logs/
+      fetcher.20260201_193638.log
+      mockchain.20260201_183003.log
+      mockchain.20260201_193638.log
+      processor.20260201_193638.log
+      writer.20260201_193638.log
     mockchain.db/
-      000006.log
+      000062.sst
+      000083.sst
+      000086.sst
+      000090.sst
+      000093.sst
+      000096.sst
+      000097.sst
+      000099.sst
+      000100.sst
+      000101.sst
+      000102.sst
+      000103.sst
+      000105.sst
+      000106.sst
+      000107.sst
+      000108.sst
+      000110.sst
+      000112.sst
+      000113.log
+      000114.sst
       CURRENT
       IDENTITY
       LOCK
       LOG
-      LOG.old.1767100592421351
+      LOG.old.1769945798702470
       MANIFEST-000005
       OPTIONS-000005
       OPTIONS-000008
+    pids/
+    spool.wal
   internal/
     logpipe/
       dispatcher/
@@ -46,6 +73,8 @@ web3-logpipe/
         consumer.go
         processor.go
         window.go
+      retry/
+        retry.go
       window/
         queue.go
         runner.go
@@ -58,8 +87,6 @@ web3-logpipe/
       generator/
         addrs.go
         txgen.go
-      hash/
-        hash32.go
       miner/
         miner.go
       model/
@@ -74,17 +101,28 @@ web3-logpipe/
   internal_tests/
     logpipe_concurrency_test.go
     rules_test.go
+  logs/
   pkg/
+    hash/
+      builder.go
+      hash32.go
     rng/
       factory.go
   scripts/
-    dev_run.sh
+    ensure_kafka.sh
+    ensure_pg.sh
+    kill_all.sh
+    logpipe.sh
   test/
     tools/
       kafka_consume/
         main.go
       kafka_produce/
         main.go
+  
+  .gitignore
+  dir_tree.txt
   go.mod
   go.sum
   README.md
+  web3-logpipe-src.zip

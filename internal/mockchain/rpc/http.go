@@ -6,9 +6,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/chenzhangda16/web3-logpipe/internal/mockchain/hash"
 	"github.com/chenzhangda16/web3-logpipe/internal/mockchain/model"
 	"github.com/chenzhangda16/web3-logpipe/internal/mockchain/store"
+	"github.com/chenzhangda16/web3-logpipe/pkg/hash"
 )
 
 type Server struct {

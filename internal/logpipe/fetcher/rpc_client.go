@@ -28,10 +28,14 @@ type BlocksRangeResp struct {
 
 func NewRPCClient(base string) *RPCClient {
 	base = strings.TrimRight(base, "/")
+	transport := &http.Transport{
+		Proxy: nil,
+	}
 	return &RPCClient{
 		base: base,
 		hc: &http.Client{
-			Timeout: 10 * time.Second,
+			Transport: transport,
+			Timeout:   10 * time.Second,
 		},
 	}
 }

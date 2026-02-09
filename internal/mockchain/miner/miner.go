@@ -2,12 +2,13 @@ package miner
 
 import (
 	"context"
+	"log"
 	"time"
 
 	"github.com/chenzhangda16/web3-logpipe/internal/mockchain/generator"
-	"github.com/chenzhangda16/web3-logpipe/internal/mockchain/hash"
 	"github.com/chenzhangda16/web3-logpipe/internal/mockchain/model"
 	"github.com/chenzhangda16/web3-logpipe/internal/mockchain/store"
+	"github.com/chenzhangda16/web3-logpipe/pkg/hash"
 	"github.com/chenzhangda16/web3-logpipe/pkg/rng"
 )
 
@@ -34,9 +35,13 @@ func NewMiner(st *store.RocksStore, txgen *generator.TxGen, rf *rng.Factory, tic
 }
 
 func (m *Miner) Warmup(backfillSec int64, gapSec int64) error {
+	start := time.Now()
+
 	if backfillSec <= 0 {
+		log.Printf("[warmup] skip: backfillSec=%d gapSec=%d tick=%s", backfillSec, gapSec, m.tick)
 		return nil
 	}
+
 	step := int64(m.tick / time.Second)
 	if step <= 0 {
 		step = 1
@@ -45,32 +50,40 @@ func (m *Miner) Warmup(backfillSec int64, gapSec int64) error {
 		// 连续阈值建议绑 tick，别用很大的秒数
 		gapSec = 3 * step
 	}
+	log.Printf("[warmup] begin: backfillSec=%d gapSec=%d tick=%s step=%ds", backfillSec, gapSec, m.tick, step)
 
 	// 1) 决策：REBUILD / TRIM / KEEP_ALL
 	curTs := time.Now().Unix()
 	action, keep, err := m.store.DecideTailAction(curTs, backfillSec, gapSec)
 	if err != nil {
+		log.Printf("[warmup] decide_tail_action failed: curTs=%d backfillSec=%d gapSec=%d err=%v", curTs, backfillSec, gapSec, err)
 		return err
 	}
+	log.Printf("[warmup] tail_action: action=%s keepHeight=%d curTs=%d targetTs=%d",
+		action.String(), keep, curTs, curTs-backfillSec)
 
 	switch action {
 	case store.TailRebuild:
-		// 清空 canonical（以及对应 raw），然后从 (now - backfillSec) 开始造
+		log.Printf("[warmup] tail_action=REBUILD: delete canonical after 0")
 		if err := m.store.DeleteCanonicalAfter(0); err != nil {
+			log.Printf("[warmup] delete_canonical_after failed: keepHeight=0 err=%v", err)
 			return err
 		}
 
 	case store.TailTrimAfterKeep:
-		// 保留到 keepHeight，抹掉后面的零散块
+		log.Printf("[warmup] tail_action=TRIM_AFTER_KEEP: delete canonical after keep=%d", keep)
 		if err := m.store.DeleteCanonicalAfter(keep); err != nil {
+			log.Printf("[warmup] delete_canonical_after failed: keepHeight=%d err=%v", keep, err)
 			return err
 		}
 
 	case store.TailKeepAllCatchUp:
-		// 不删
+		log.Printf("[warmup] tail_action=KEEP_ALL_CATCH_UP: no deletion")
 	default:
 		// 容错：当作 rebuild
+		log.Printf("[warmup] tail_action=UNKNOWN: treat as REBUILD, delete canonical after 0")
 		if err := m.store.DeleteCanonicalAfter(0); err != nil {
+			log.Printf("[warmup] delete_canonical_after failed: keepHeight=0 err=%v", err)
 			return err
 		}
 	}
@@ -78,36 +91,54 @@ func (m *Miner) Warmup(backfillSec int64, gapSec int64) error {
 	// 2) 重新加载 head（因为可能删过）
 	parentHash, nextNum, lastTs, hasHead, err := m.loadHead()
 	if err != nil {
+		log.Printf("[warmup] load_head failed: err=%v", err)
 		return err
 	}
+	log.Printf("[warmup] head_loaded: hasHead=%v nextNum=%d lastTs=%d parent=%s", hasHead, nextNum, lastTs, parentHash.Hex())
 
 	// 3) 决定 warmup 起点时间 ts
 	// - 如果是空库（或刚 rebuild），从 now-backfillSec 开始造
 	// - 否则从 lastTs+step 开始补洞
 	ts := int64(0)
 	if !hasHead {
-		// 注意：起点基于“当前时刻”，而终点用动态墙
 		ts = time.Now().Unix() - backfillSec
 		if ts < 0 {
 			ts = 0
 		}
+		log.Printf("[warmup] start_from_empty: ts=%d (now-backfillSec)", ts)
 	} else {
 		ts = lastTs + step
+		log.Printf("[warmup] start_from_last: ts=%d (lastTs+step)", ts)
 	}
 
 	// 4) 动态追时间墙：只要 ts+step < dynamicNow，就继续“加速挖”
+	var mined int64
+	lastLog := time.Now()
 	for {
 		dynamicNow := time.Now().Unix()
 		if ts+step >= dynamicNow {
 			break
 		}
+
 		if err := m.mineOne(nextNum, &parentHash, ts); err != nil {
+			log.Printf("[warmup] mine_one failed: bn=%d ts=%d err=%v (mined=%d cost=%s)",
+				nextNum, ts, err, mined, time.Since(start))
 			return err
 		}
+		mined++
 		nextNum++
 		ts += step
+
+		// 节流：最多每 1s 打一条进度（避免 backfill 很大时刷屏）
+		if time.Since(lastLog) >= 1*time.Second {
+			lag := dynamicNow - ts
+			log.Printf("[warmup] progress: mined=%d nextNum=%d ts=%d dynamicNow=%d lag=%ds cost=%s",
+				mined, nextNum, ts, dynamicNow, lag, time.Since(start))
+			lastLog = time.Now()
+		}
 	}
 
+	log.Printf("[warmup] done: mined=%d nextNum=%d endTs=%d cost=%s", mined, nextNum, ts, time.Since(start))
 	return nil
 }
 

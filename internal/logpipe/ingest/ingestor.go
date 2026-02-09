@@ -40,6 +40,7 @@ type Ingestor struct {
 	validCount  uint32
 	rbInCh      [MaxGroutines]chan struct{}
 	rbOutCh     [MaxGroutines]chan struct{}
+	tmpTxTail   []int64
 	rbBlockInfo *[dispatcher.MaxBlocksPerWindow]BlockWinMarginInfo
 	rbTxSum     int64
 	firstOffset int64
@@ -89,7 +90,7 @@ func NewIngestor(
 	ig.rbInCh[0] <- struct{}{}
 	ig.rbOutCh[0] <- struct{}{}
 	ig.rbBlockInfo = new([dispatcher.MaxBlocksPerWindow]BlockWinMarginInfo)
-
+	//ig.tmpTxTail = make([]int64, len(ig.blockTail))
 	ig.wg.Add(workerN)
 	for i := 0; i < workerN; i++ {
 		go func() {
@@ -146,6 +147,12 @@ func (ig *Ingestor) decodeLoop() {
 
 		curRbTxSum := ig.rbTxSum
 		ig.rbTxSum += int64(len(blk.Txs))
+
+		ig.rbBlockInfo[reIdx] = BlockWinMarginInfo{
+			blockTs:     blk.Header.Timestamp,
+			relativeIdx: curRbTxSum,
+		}
+
 		openWin := false
 		for idx, tail := range ig.blockTail {
 			for blk.Header.Timestamp-ig.rbBlockInfo[tail%dispatcher.MaxBlocksPerWindow].blockTs > ig.winTs[idx] {
@@ -157,22 +164,19 @@ func (ig *Ingestor) decodeLoop() {
 				//	条件是可以修改的，比如ig.rawCh内空了可能更能证明窗口填好了
 			}
 		}
+		//curTxTail := ig.tmpTxTail
 		curTxTail := make([]int64, len(ig.blockTail))
 		curTxHead := ig.rbTxSum
 		for idx, tail := range ig.blockTail {
 			curTxTail[idx] = ig.rbBlockInfo[tail%dispatcher.MaxBlocksPerWindow].relativeIdx
 		}
-		ig.rbBlockInfo[reIdx] = BlockWinMarginInfo{
-			blockTs:     blk.Header.Timestamp,
-			relativeIdx: curRbTxSum,
-		}
 
 		ig.rbInCh[(reOffset+1)%MaxGroutines] <- struct{}{}
 
 		parts := 1
-		if len(ig.rawCh) == 0 {
-			parts = 16 // 写死最大并发
-		}
+		//if len(ig.rawCh) == 0 {
+		//	parts = 16 // 写死最大并发
+		//}
 
 		ig.adapter.EmitTxEventsFromBlock(blk, curRbTxSum, func(ev event.TxEvent, idx int64) {
 			ig.disp.Append(ev, idx)
@@ -181,6 +185,10 @@ func (ig *Ingestor) decodeLoop() {
 		<-ig.rbOutCh[reOffset%MaxGroutines]
 
 		ig.disp.WinMove(curTxTail, curTxHead, openWin)
+		if reOffset%100 == 0 {
+			log.Printf("[ingest] off=%d first=%d re=%d blk=%d tx=%d rawCh=%d",
+				rawMsg.Offset, ig.firstOffset, reOffset, blk.Header.Number, len(blk.Txs), len(ig.rawCh))
+		}
 
 		ig.rbOutCh[(reOffset+1)%MaxGroutines] <- struct{}{}
 	}

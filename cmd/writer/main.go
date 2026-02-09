@@ -58,6 +58,7 @@ func (h *Handler) ConsumeClaim(sess sarama.ConsumerGroupSession, claim sarama.Co
 }
 
 func main() {
+	log.SetFlags(log.Ldate | log.Ltime | log.Lmicroseconds | log.Lshortfile)
 	var (
 		brokers = flag.String("brokers", "127.0.0.1:9092", "kafka brokers, comma separated")
 		topic   = flag.String("topic", "logpipe.out", "out topic")
