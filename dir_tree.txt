@@ -12,43 +12,67 @@ web3-logpipe/
     logpipe.dev.yaml
     logpipe.local.yaml
   data/
-    logs/
-      fetcher.20260201_193638.log
-      mockchain.20260201_183003.log
-      mockchain.20260201_193638.log
-      processor.20260201_193638.log
-      writer.20260201_193638.log
     mockchain.db/
-      000062.sst
-      000083.sst
-      000086.sst
-      000090.sst
-      000093.sst
-      000096.sst
-      000097.sst
-      000099.sst
-      000100.sst
-      000101.sst
-      000102.sst
-      000103.sst
-      000105.sst
-      000106.sst
-      000107.sst
-      000108.sst
-      000110.sst
-      000112.sst
-      000113.log
-      000114.sst
+      000230.sst
+      000279.sst
+      000332.sst
+      000335.sst
+      000338.sst
+      000341.sst
+      000342.sst
+      000343.log
+      000345.sst
+      000347.sst
+      000356.sst
+      000359.sst
+      000360.sst
+      000361.sst
+      000362.sst
+      000364.sst
+      000365.sst
+      000367.sst
+      000368.sst
+      000369.sst
+      000371.sst
+      000372.sst
+      000373.sst
+      000374.sst
+      000375.sst
+      000376.sst
+      000377.sst
+      000379.sst
+      000380.sst
+      000381.sst
+      000383.sst
+      000384.sst
+      000385.sst
+      000387.sst
+      000388.sst
+      000389.sst
+      000391.sst
+      000392.sst
+      000393.sst
+      000394.sst
+      000395.sst
+      000396.sst
+      000397.sst
+      000399.sst
+      000400.sst
+      000401.sst
+      000402.sst
       CURRENT
       IDENTITY
       LOCK
       LOG
-      LOG.old.1769945798702470
-      MANIFEST-000005
-      OPTIONS-000005
-      OPTIONS-000008
-    pids/
-    spool.wal
+      LOG.old.1770985487500846
+      LOG.old.1770986720275612
+      LOG.old.1770986799162986
+      LOG.old.1771070392983107
+      MANIFEST-000255
+      OPTIONS-000255
+      OPTIONS-000258
+  doc/
+    develop.md
   internal/
     logpipe/
       dispatcher/
@@ -73,6 +97,8 @@ web3-logpipe/
         consumer.go
         processor.go
         window.go
+      ready/
+        fifo.go
       retry/
         retry.go
       window/
@@ -111,18 +137,26 @@ web3-logpipe/
   scripts/
     ensure_kafka.sh
     ensure_pg.sh
+    factory_reset.sh
     kill_all.sh
     logpipe.sh
-  test/
-    tools/
+    stop_infra.sh
+    stop_kafka.sh
+    stop_pg.sh
+  test_tools/
+    kafka/
       kafka_consume/
         main.go
       kafka_produce/
         main.go
-  
+    python/
+      ts2date.py
+    shell/
+      test1.sh
+      test2.sh
   .gitignore
-  dir_tree.txt
   go.mod
   go.sum
+  hs_err_pid26521.log
   README.md
   web3-logpipe-src.zip
