@@ -8,20 +8,30 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
 	"github.com/IBM/sarama"
 
 	"github.com/chenzhangda16/web3-logpipe/internal/logpipe/out"
+	"github.com/chenzhangda16/web3-logpipe/internal/logpipe/ready"
 	"github.com/chenzhangda16/web3-logpipe/internal/logpipe/writer"
 )
 
 type Handler struct {
-	pg *writer.PGWriter
+	readyFifo string
+	readyOnce sync.Once
+	pg        *writer.PGWriter
 }
 
-func (h *Handler) Setup(sarama.ConsumerGroupSession) error   { return nil }
+func (h *Handler) Setup(sess sarama.ConsumerGroupSession) error {
+	h.readyOnce.Do(func() {
+		log.Printf("[ready] writer session established, signaling fifo=%s", h.readyFifo)
+		go ready.SignalFifoCtx(sess.Context(), h.readyFifo, "READY\n", 8*time.Second)
+	})
+	return nil
+}
 func (h *Handler) Cleanup(sarama.ConsumerGroupSession) error { return nil }
 
 func (h *Handler) ConsumeClaim(sess sarama.ConsumerGroupSession, claim sarama.ConsumerGroupClaim) error {
@@ -60,9 +70,10 @@ func (h *Handler) ConsumeClaim(sess sarama.ConsumerGroupSession, claim sarama.Co
 func main() {
 	log.SetFlags(log.Ldate | log.Ltime | log.Lmicroseconds | log.Lshortfile)
 	var (
-		brokers = flag.String("brokers", "127.0.0.1:9092", "kafka brokers, comma separated")
-		topic   = flag.String("topic", "logpipe.out", "out topic")
-		group   = flag.String("group", "logpipe.writer", "consumer group")
+		brokers   = flag.String("brokers", "127.0.0.1:9092", "kafka brokers, comma separated")
+		topic     = flag.String("topic", "logpipe.out", "out topic")
+		group     = flag.String("group", "logpipe.writer", "consumer group")
+		readyFifo = flag.String("ready-fifo", "./data/ready/writer.ready.fifo", "write one line to FIFO when ready")
 	)
 	flag.Parse()
 
@@ -97,7 +108,10 @@ func main() {
 	}
 	defer func() { _ = cg.Close() }()
 
-	h := &Handler{pg: pg}
+	h := &Handler{
+		readyFifo: *readyFifo,
+		pg:        pg,
+	}
 
 	log.Printf("[writer] start: topic=%s group=%s brokers=%s", *topic, *group, *brokers)
 

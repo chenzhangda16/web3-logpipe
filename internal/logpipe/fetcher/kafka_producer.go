@@ -69,9 +69,10 @@ func (p *Producer) ProduceBlock(ctx context.Context, b model.Block) error {
 	}
 
 	msg := &sarama.ProducerMessage{
-		Topic: p.topic,
-		Key:   sarama.StringEncoder(strconv.FormatInt(b.Header.Number, 10)),
-		Value: sarama.ByteEncoder(payload),
+		Topic:     p.topic,
+		Key:       sarama.StringEncoder(strconv.FormatInt(b.Header.Number, 10)),
+		Value:     sarama.ByteEncoder(payload),
+		Timestamp: time.Unix(b.Header.Timestamp, 0),
 	}
 
 	// sarama SyncProducer doesn't accept context directly; we can only check ctx before/after.

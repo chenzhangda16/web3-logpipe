@@ -47,8 +47,11 @@ func main() {
 		"[mockchain] start db=%s rpc=%s addr=%s tick=%s det=%v seed=%d backfill=%ds gap=%ds",
 		*dbPath, *rpcAddr, *addrCount, *tick, *det, *seed, *backfillSec, *gapSec,
 	)
-
-	st, err := store.Open(*dbPath)
+	if *gapSec <= 0 {
+		// 连续阈值建议绑 tick，别用很大的秒数
+		*gapSec = 3 * int64(*tick/time.Second)
+	}
+	st, err := store.Open(*dbPath, *gapSec)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -65,7 +68,7 @@ func main() {
 	// --- Warmup / Backfill (sync) ---
 	if *backfillSec > 0 {
 		start := time.Now()
-		if err := m.Warmup(*backfillSec, *gapSec); err != nil {
+		if err := m.Warmup(*backfillSec); err != nil {
 			log.Fatal(err)
 		}
 		log.Printf("warmup done: backfill=%ds gap=%ds tick=%s cost=%s.", *backfillSec, *gapSec, tick.String(), time.Since(start).String())

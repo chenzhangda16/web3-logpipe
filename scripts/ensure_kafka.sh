@@ -34,13 +34,12 @@ set -euo pipefail
 # ----------------------------- config defaults --------------------------------
 KAFKA_BROKERS="${KAFKA_BROKERS:-127.0.0.1:9092}"
 KAFKA_HOME="${KAFKA_HOME:-/opt/kafka_2.13-3.8.0}"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 KAFKA_CONFIG="${KAFKA_CONFIG:-$KAFKA_HOME/config/kraft/server.properties}"
 KAFKA_PROJECT_DIR="${KAFKA_PROJECT_DIR:-$ROOT_DIR/data/kafka}"
 KAFKA_PROJECT_LOG_DIR="${KAFKA_PROJECT_LOG_DIR:-$KAFKA_PROJECT_DIR/logs}"
 KAFKA_PROJECT_CONFIG="${KAFKA_PROJECT_CONFIG:-$KAFKA_PROJECT_DIR/server.properties}"
 mkdir -p "$KAFKA_PROJECT_DIR" "$KAFKA_PROJECT_LOG_DIR"
-
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PID_DIR="${PID_DIR:-$ROOT_DIR/data/pids}"
 LOG_DIR="${LOG_DIR:-$ROOT_DIR/data/logs}"
 KAFKA_PID_FILE="${KAFKA_PID_FILE:-$PID_DIR/kafka.pid}"

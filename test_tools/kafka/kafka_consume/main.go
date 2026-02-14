@@ -35,7 +35,7 @@ func main() {
 
 	group, err := sarama.NewConsumerGroup(
 		[]string{"localhost:9092"},
-		"logpipe-test",
+		"logpipe-test_tools",
 		cfg,
 	)
 	if err != nil {

@@ -59,6 +59,24 @@ export PG_DSN="postgres://${PG_DB_USER:-web3}:${PG_DB_PASS:-web3}@${PG_HOST:-127
 
 : "${NO_BUILD:=false}"
 
+READY_DIR="$ROOT_DIR/data/ready"
+mkdir -p "$READY_DIR"
+
+wait_ready_fifo() {
+  local fifo="$1"
+  local timeout_sec="${2:-30}"
+
+  [[ -p "$fifo" ]] || { echo "ready fifo not found: $fifo" >&2; return 1; }
+
+  # 阻塞读一行；用 timeout 防止永等（非忙等）
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "${timeout_sec}s" bash -c "read -r _ < '$fifo'"
+  else
+    # 没有 timeout 就退化（仍阻塞，但你自己Ctrl+C）
+    read -r _ < "$fifo"
+  fi
+}
+
 # ----------------------------
 # helpers
 # ----------------------------
@@ -418,55 +436,73 @@ start() {
   log "mockchain rpc ready: $RPC_BASE"
 
   # ----------------------
-  # 2) fetcher
-  # ----------------------
-  log "starting fetcher..."
-  local fetch_log="$LOG_DIR/fetcher.$ts.log"
-  local pid_fetch=""
-  start_with_dual_logs pid_fetch fetcher "$fetch_log" -- \
-    ./bin/fetcher \
-      -rpc "$RPC_BASE" \
-      -brokers "$KAFKA_BROKERS" \
-      -topic "$KAFKA_TOPIC" \
-      -backfill-sec "$FETCH_BACKFILL_SEC" \
-      -page "$FETCH_PAGE" \
-      -poll-head "$FETCH_POLL_HEAD" \
-      -idle-sleep "$FETCH_IDLE_SLEEP" \
-      -ckpt "$FETCH_CKPT"
-  append_pid "$pid_fetch"
-  log "fetcher pid=$pid_fetch log=$fetch_log latest=$LOG_DIR/fetcher.latest.log"
+    # 2) writer
+    # ----------------------
+    log "starting writer..."
+    local writer_log="$LOG_DIR/writer.$ts.log"
+    local pid_writer=""
+    local writer_fifo="$READY_DIR/writer.ready.fifo"
+    rm -f "$writer_fifo"
+    mkfifo "$writer_fifo"
 
-  # ----------------------
-  # 3) processor
-  # ----------------------
-  log "starting processor..."
-  local proc_log="$LOG_DIR/processor.$ts.log"
-  local pid_proc=""
-  start_with_dual_logs pid_proc processor "$proc_log" -- \
-    ./bin/processor \
-      -brokers "$KAFKA_BROKERS" \
-      -group "$PROC_GROUP" \
-      -topic "$KAFKA_TOPIC" \
-      -spool "$PROC_SPOOL" \
-      -decode-worker "$PROC_DECODE_WORKER" \
-      -decode-queue "$PROC_DECODE_QUEUE" \
-      -ckpt "$PROC_CKPT"
-  append_pid "$pid_proc"
-  log "processor pid=$pid_proc log=$proc_log latest=$LOG_DIR/processor.latest.log"
+    start_with_dual_logs pid_writer writer "$writer_log" -- \
+      ./bin/writer \
+        -brokers "$KAFKA_BROKERS" \
+        -topic "$OUT_TOPIC" \
+        -group "$WRITER_GROUP" \
+        -ready-fifo "$writer_fifo"
+    append_pid "$pid_writer"
+    log "writer pid=$pid_writer log=$writer_log latest=$LOG_DIR/writer.latest.log"
 
-  # ----------------------
-  # 4) writer
-  # ----------------------
-  log "starting writer..."
-  local writer_log="$LOG_DIR/writer.$ts.log"
-  local pid_writer=""
-  start_with_dual_logs pid_writer writer "$writer_log" -- \
-    ./bin/writer \
-      -brokers "$KAFKA_BROKERS" \
-      -topic "$OUT_TOPIC" \
-      -group "$WRITER_GROUP"
-  append_pid "$pid_writer"
-  log "writer pid=$pid_writer log=$writer_log latest=$LOG_DIR/writer.latest.log"
+    log "waiting for writer ready..."
+    wait_ready_fifo "$writer_fifo" 60
+    log "writer ready"
+
+    # ----------------------
+    # 3) processor
+    # ----------------------
+    log "starting processor..."
+    local proc_log="$LOG_DIR/processor.$ts.log"
+    local pid_proc=""
+    local proc_fifo="$READY_DIR/processor.ready.fifo"
+    rm -f "$proc_fifo"
+    mkfifo "$proc_fifo"
+
+    start_with_dual_logs pid_proc processor "$proc_log" -- \
+      ./bin/processor \
+        -brokers "$KAFKA_BROKERS" \
+        -group "$PROC_GROUP" \
+        -topic "$KAFKA_TOPIC" \
+        -spool "$PROC_SPOOL" \
+        -decode-worker "$PROC_DECODE_WORKER" \
+        -decode-queue "$PROC_DECODE_QUEUE" \
+        -ckpt "$PROC_CKPT" \
+        -ready-fifo "$proc_fifo"
+    append_pid "$pid_proc"
+    log "processor pid=$pid_proc log=$proc_log latest=$LOG_DIR/processor.latest.log"
+
+    log "waiting for processor ready..."
+    wait_ready_fifo "$proc_fifo" 60
+    log "processor ready"
+
+    # ----------------------
+    # 4) fetcher
+    # ----------------------
+    log "starting fetcher..."
+    local fetch_log="$LOG_DIR/fetcher.$ts.log"
+    local pid_fetch=""
+    start_with_dual_logs pid_fetch fetcher "$fetch_log" -- \
+      ./bin/fetcher \
+        -rpc "$RPC_BASE" \
+        -brokers "$KAFKA_BROKERS" \
+        -topic "$KAFKA_TOPIC" \
+        -backfill-sec "$FETCH_BACKFILL_SEC" \
+        -page "$FETCH_PAGE" \
+        -poll-head "$FETCH_POLL_HEAD" \
+        -idle-sleep "$FETCH_IDLE_SLEEP" \
+        -ckpt "$FETCH_CKPT"
+    append_pid "$pid_fetch"
+    log "fetcher pid=$pid_fetch log=$fetch_log latest=$LOG_DIR/fetcher.latest.log"
 
   # start succeeded -> disable the start-only trap
   trap - ERR INT TERM

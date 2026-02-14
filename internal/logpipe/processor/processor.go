@@ -16,9 +16,10 @@ import (
 )
 
 type Config struct {
-	Brokers string
-	Group   string
-	Topic   string
+	ReadyFifo string
+	Brokers   string
+	Group     string
+	Topic     string
 
 	SpoolPath    string
 	DecodeWorker int
@@ -58,7 +59,7 @@ func New(cfg Config) (*Processor, error) {
 		return nil, err
 	}
 
-	ig := ingest.NewIngestor(disp, sp, cfg.DecodeWorker, cfg.DecodeQueue, adapter, client, cfg.Topic)
+	ig := ingest.NewIngestor(cfg.ReadyFifo, disp, sp, cfg.DecodeWorker, cfg.DecodeQueue, adapter, client, cfg.Topic)
 
 	sink, _ := out.NewKafkaSink([]string{"127.0.0.1:9092"}, "logpipe.out", sarama.NewConfig())
 
@@ -82,8 +83,19 @@ func New(cfg Config) (*Processor, error) {
 }
 
 func (p *Processor) Close() error {
-	_ = p.ingestor.Close()
-	return p.cons.Close()
+	if p.ingestor != nil {
+		_ = p.ingestor.Close()
+	}
+	if p.cons != nil {
+		_ = p.cons.Close()
+	}
+	if p.client != nil {
+		_ = p.client.Close()
+	}
+	if p.spool != nil {
+		_ = p.spool.Close()
+	}
+	return nil
 }
 
 func (p *Processor) Run(ctx context.Context) error {

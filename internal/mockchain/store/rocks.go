@@ -1,6 +1,7 @@
 package store
 
 import (
+	"bytes"
 	"errors"
 	"log"
 	"strconv"
@@ -16,6 +17,10 @@ type RocksStore struct {
 	ro         *gorocksdb.ReadOptions
 	wo         *gorocksdb.WriteOptions
 	gapRuleSec int64
+
+	lastCanonHeight int64
+	lastCanonTs     int64
+	lastCanonValid  bool
 }
 
 type TailAction int
@@ -31,6 +36,10 @@ const (
 	TailTrimAfterKeep
 )
 
+func (s *RocksStore) GapRuleSec() int64 {
+	return s.gapRuleSec
+}
+
 func (a TailAction) String() string {
 	switch a {
 	case TailRebuild:
@@ -44,7 +53,7 @@ func (a TailAction) String() string {
 	}
 }
 
-func Open(path string) (*RocksStore, error) {
+func Open(path string, gapRuleSec int64) (*RocksStore, error) {
 	opts := gorocksdb.NewDefaultOptions()
 	opts.SetCreateIfMissing(true)
 
@@ -54,9 +63,10 @@ func Open(path string) (*RocksStore, error) {
 	}
 
 	return &RocksStore{
-		db: db,
-		ro: gorocksdb.NewDefaultReadOptions(),
-		wo: gorocksdb.NewDefaultWriteOptions(),
+		db:         db,
+		ro:         gorocksdb.NewDefaultReadOptions(),
+		wo:         gorocksdb.NewDefaultWriteOptions(),
+		gapRuleSec: gapRuleSec,
 	}, nil
 }
 
@@ -160,35 +170,42 @@ func (s *RocksStore) AppendCanonicalBlock(b model.Block, raw []byte) error {
 	// 4) meta:head_num -> number
 	wb.Put(KeyHeadNum(), []byte(strconv.FormatInt(b.Header.Number, 10)))
 
-	// 5) meta:gap_head -> earliest height where (ts[n]-ts[n-1]) > gapSec
-	//    NOTE: 这里 gapSec 必须来自配置。你目前 store 层没有 gapSec 参数。
-	//    最小侵入做法：先不在这里做 gap 判定，只做 canon_ts 索引（立刻消灭 15s 扫描）。
-	//    若你坚持“更狠更准”在写入时维护 gap，则需要：
-	//      - RocksStore 持有 cfg.GapSec（或方法入参带 gapSec）
-	//      - 或者把 gapSec 固化为 tick*3 这种固定策略（不推荐）
-	//
-	// 我先给你“可选块”，你把 gapSec 接进来后再启用：
+	// 5) gap event index (shape-2): gap_end_ts:{gapSec}:{endTs} -> height
+	// only if gap rule is set for this run
+	gapSec := s.gapRuleSec
+	if gapSec > 0 && b.Header.Number > 1 {
+		var prevTs int64
+		var ok bool
 
-	/*
-		if gapSec > 0 && b.Header.Number > 1 {
-			// prev ts from canon_ts (fast path)
-			prevRaw, err := s.db.Get(s.ro, KeyCanonTS(b.Header.Number-1))
-			if err == nil {
-				defer prevRaw.Free()
-				if prevTs, ok := decodeI64BE(prevRaw.Data()); ok {
-					if b.Header.Timestamp-prevTs > gapSec {
-						// if gap_head is not set (or is 0), set it to current height
-						gh, _ := s.getGapHead() // small helper reads KeyGapHead
-						if gh == 0 {
-							wb.Put(KeyGapHead(), []byte(strconv.FormatInt(b.Header.Number, 10)))
-						}
-					}
-				}
+		// fast path: in-memory tail cache
+		if s.lastCanonValid && s.lastCanonHeight == b.Header.Number-1 {
+			prevTs = s.lastCanonTs
+			ok = true
+		} else {
+			// fallback: read prev timestamp once (still fast due to canon_ts)
+			var err error
+			prevTs, ok, err = s.GetCanonicalTimestamp(b.Header.Number - 1)
+			if err != nil {
+				// 读失败不致命：先不写 gap 事件[mark:unreliable]
+				ok = false
 			}
 		}
-	*/
 
-	return s.db.Write(s.wo, wb)
+		if ok && b.Header.Timestamp-prevTs > gapSec {
+			wb.Put(KeyGapEndTS(gapSec, b.Header.Timestamp), encodeI64BE(b.Header.Number))
+		}
+	}
+
+	if err := s.db.Write(s.wo, wb); err != nil {
+		return err
+	}
+
+	// update in-memory tail cache after successful write
+	s.lastCanonHeight = b.Header.Number
+	s.lastCanonTs = b.Header.Timestamp
+	s.lastCanonValid = true
+
+	return nil
 }
 
 // DecideTailAction decides how to handle tail continuity for backfill window.
@@ -205,22 +222,21 @@ func (s *RocksStore) AppendCanonicalBlock(b model.Block, raw []byte) error {
 //   - REBUILD: delete all and rebuild from target
 //
 // - keepHeight: only meaningful when action == TRIM_AFTER_KEEP (or keep-all uses headNum)
-func (s *RocksStore) DecideTailAction(curTs int64, backfillSec int64, gapSec int64) (action TailAction, keepHeight int64, err error) {
+func (s *RocksStore) DecideTailAction(curTs int64, backfillSec int64) (action TailAction, keepHeight int64, err error) {
 	start := time.Now()
-
+	gapSec := s.gapRuleSec
+	// --- sanitize ---
 	if backfillSec <= 0 {
-		// no window requirement, just keep all
-		log.Printf("[tail] decide: backfillSec<=0 => KEEP_ALL_CATCH_UP (curTs=%d backfillSec=%d gapSec=%d)", curTs, backfillSec, gapSec)
+		log.Printf("[tail] decide: backfillSec<=0 => KEEP_ALL_CATCH_UP (curTs=%d backfillSec=%d gapSec=%d) cost=%s",
+			curTs, backfillSec, gapSec, time.Since(start))
 		return TailKeepAllCatchUp, 0, nil
-	}
-	if gapSec <= 0 {
-		gapSec = 1
 	}
 
 	target := curTs - backfillSec
 	windowEnd := target + gapSec
 	log.Printf("[tail] decide: curTs=%d backfillSec=%d gapSec=%d target=%d windowEnd=%d", curTs, backfillSec, gapSec, target, windowEnd)
 
+	// --- head ---
 	headNum, okHead, err := s.HeadNum()
 	if err != nil {
 		log.Printf("[tail] headnum failed: err=%v cost=%s", err, time.Since(start))
@@ -231,7 +247,6 @@ func (s *RocksStore) DecideTailAction(curTs int64, backfillSec int64, gapSec int
 		return TailRebuild, 0, nil
 	}
 
-	// Read head timestamp.
 	headTs, okTs, err := s.GetCanonicalTimestamp(headNum)
 	if err != nil {
 		log.Printf("[tail] head timestamp failed: headNum=%d err=%v cost=%s", headNum, err, time.Since(start))
@@ -243,14 +258,14 @@ func (s *RocksStore) DecideTailAction(curTs int64, backfillSec int64, gapSec int
 	}
 	log.Printf("[tail] head: headNum=%d headTs=%d target=%d", headNum, headTs, target)
 
-	// Case 1: chain hasn't reached target time yet -> keep all, just mine forward to catch up.
+	// If head hasn't reached target time -> keep all and just mine forward.
 	if headTs < target {
 		log.Printf("[tail] headTs<target => KEEP_ALL_CATCH_UP (headTs=%d target=%d headNum=%d) cost=%s",
 			headTs, target, headNum, time.Since(start))
 		return TailKeepAllCatchUp, headNum, nil
 	}
 
-	// Find lower_bound: smallest n such that ts(n) >= target
+	// --- lower_bound(target) to get starting position near target ---
 	pos, tsPos, okPos, err := s.LowerBoundByTimestamp(target)
 	if err != nil {
 		log.Printf("[tail] lower_bound failed: target=%d err=%v cost=%s", target, err, time.Since(start))
@@ -263,7 +278,8 @@ func (s *RocksStore) DecideTailAction(curTs int64, backfillSec int64, gapSec int
 	}
 	log.Printf("[tail] lower_bound: pos=%d tsPos=%d (target=%d windowEnd=%d)", pos, tsPos, target, windowEnd)
 
-	// If the first candidate already jumps beyond windowEnd, there is a "hole" around target -> trim or rebuild.
+	// Quick hole detection around target:
+	// If first ts>=target is already beyond windowEnd, there is a hole near target -> trim to pos-1 (or rebuild)
 	if tsPos > windowEnd {
 		if pos-1 >= 1 {
 			log.Printf("[tail] tsPos>windowEnd => TRIM_AFTER_KEEP keep=%d (pos=%d tsPos=%d windowEnd=%d) cost=%s",
@@ -275,41 +291,114 @@ func (s *RocksStore) DecideTailAction(curTs int64, backfillSec int64, gapSec int
 		return TailRebuild, 0, nil
 	}
 
-	end := pos
-	prevTs := tsPos
-
-	// scan forward to find contiguous suffix under gapSec definition
-	for n := pos + 1; n <= headNum; n++ {
-		ts, ok, err := s.GetCanonicalTimestamp(n)
-		if err != nil {
-			log.Printf("[tail] scan ts failed => REBUILD (n=%d err=%v) cost=%s", n, err, time.Since(start))
-			return TailRebuild, 0, err
-		}
-		if !ok {
-			log.Printf("[tail] scan missing ts: break (n=%d) end=%d headNum=%d cost=%s", n, end, headNum, time.Since(start))
-			break
-		}
-
-		delta := ts - prevTs
-		if delta <= gapSec {
-			end = n
-			prevTs = ts
-			continue
-		}
-
-		log.Printf("[tail] non_contiguous: break (n=%d ts=%d prevTs=%d delta=%d gapSec=%d) end=%d headNum=%d cost=%s",
-			n, ts, prevTs, delta, gapSec, end, headNum, time.Since(start))
-		break
+	// --- gap index fast path (shape-2) ---
+	storedGap, hasStored, err := s.getStoredGapRuleSec()
+	if err != nil {
+		log.Printf("[tail] gap_rule meta read failed: err=%v cost=%s", err, time.Since(start))
+		return TailRebuild, 0, err
 	}
 
-	// If end < headNum, blocks after end are "islands" -> trim them.
-	if end < headNum {
-		log.Printf("[tail] result: TRIM_AFTER_KEEP keep=%d (end=%d headNum=%d) cost=%s", end, end, headNum, time.Since(start))
-		return TailTrimAfterKeep, end, nil
+	log.Printf(
+		"[tail][rule] runtimeGap=%d storedGap=%v storedGapSec=%d",
+		s.GapRuleSec(),
+		hasStored,
+		func() int64 {
+			if hasStored {
+				return storedGap
+			}
+			return 0
+		}(),
+	)
+
+	if hasStored && storedGap == gapSec {
+		log.Printf("[tail] gap_index fastpath: storedGap=%d matches gapSec=%d (target=%d)", storedGap, gapSec, target)
+
+		it := s.db.NewIterator(s.ro)
+		defer it.Close()
+
+		prefix := GapPrefix(gapSec)
+		seekKey := KeyGapEndTS(gapSec, target)
+
+		seen := 0
+		for it.Seek(seekKey); it.Valid(); it.Next() {
+			seen++
+
+			k := it.Key()
+			v := it.Value()
+			kBytes := append([]byte(nil), k.Data()...)
+			vBytes := append([]byte(nil), v.Data()...)
+			k.Free()
+			v.Free()
+
+			if !bytes.HasPrefix(kBytes, prefix) {
+				break
+			}
+
+			h, ok := decodeI64BE(vBytes)
+			if !ok {
+				log.Printf("[tail] gap_index bad value: seen=%d (skip) cost=%s", seen, time.Since(start))
+				continue
+			}
+
+			valid, err := s.validateGapAtHeight(h, headNum, gapSec)
+			if err != nil {
+				log.Printf("[tail] gap_index validate failed: h=%d err=%v cost=%s", h, err, time.Since(start))
+				return TailRebuild, 0, err
+			}
+			if !valid {
+				log.Printf("[tail] gap_index stale/invalid: h=%d (skip) seen=%d", h, seen)
+				continue
+			}
+
+			keep := h - 1
+			if keep < 1 {
+				log.Printf("[tail] gap_index hit => REBUILD (h=%d keep=%d) cost=%s", h, keep, time.Since(start))
+				return TailRebuild, 0, nil
+			}
+
+			log.Printf("[tail] gap_index hit => TRIM_AFTER_KEEP keep=%d (gapHeight=%d) seen=%d cost=%s",
+				keep, h, seen, time.Since(start))
+			return TailTrimAfterKeep, keep, nil
+		}
+
+		log.Printf("[tail] gap_index miss => KEEP_ALL_CATCH_UP (seen=%d) cost=%s", seen, time.Since(start))
+		return TailKeepAllCatchUp, headNum, nil
 	}
 
-	// Already contiguous all the way to head -> keep all and catch up.
-	log.Printf("[tail] result: KEEP_ALL_CATCH_UP keep=%d (contiguous_to_head) cost=%s", headNum, time.Since(start))
+	// --- fallback: sequential scan after pos (fast because canon_ts is 8 bytes) ---
+	if hasStored {
+		log.Printf("[tail] gap_index fallback: storedGap=%d != gapSec=%d (target=%d) => scan", storedGap, gapSec, target)
+	} else {
+		log.Printf("[tail] gap_index fallback: no stored meta (gapSec=%d target=%d) => scan", gapSec, target)
+	}
+
+	gapH, gapEndTs, okGap, err := s.findFirstGapAfterPos(pos, headNum, gapSec, target)
+	if err != nil {
+		log.Printf("[tail] fallback scan failed: pos=%d headNum=%d err=%v cost=%s", pos, headNum, err, time.Since(start))
+		return TailRebuild, 0, err
+	}
+
+	// we completed fallback for this rule -> store meta for future fast path
+	if err := s.setStoredGapRuleSec(gapSec); err != nil {
+		// 不把 meta 写入失败当作致命错误
+		log.Printf("[tail] set gap_rule meta failed: gapSec=%d err=%v (ignored)", gapSec, err)
+	} else {
+		log.Printf("[tail] set gap_rule meta: gapSec=%d", gapSec)
+	}
+
+	if okGap {
+		keep := gapH - 1
+		if keep < 1 {
+			log.Printf("[tail] fallback found gap => REBUILD (gapHeight=%d gapEndTs=%d keep=%d) cost=%s",
+				gapH, gapEndTs, keep, time.Since(start))
+			return TailRebuild, 0, nil
+		}
+		log.Printf("[tail] fallback found gap => TRIM_AFTER_KEEP keep=%d (gapHeight=%d gapEndTs=%d) cost=%s",
+			keep, gapH, gapEndTs, time.Since(start))
+		return TailTrimAfterKeep, keep, nil
+	}
+
+	log.Printf("[tail] fallback scan no gap => KEEP_ALL_CATCH_UP keep=%d cost=%s", headNum, time.Since(start))
 	return TailKeepAllCatchUp, headNum, nil
 }
 
@@ -372,7 +461,16 @@ func (s *RocksStore) DeleteCanonicalAfter(keepHeight int64) error {
 	// (If you want "recompute gap_head up to keepHeight", that would require scanning; don't do it here.)
 	wb.Delete(KeyGapHead())
 
-	return s.db.Write(s.wo, wb)
+	if err := s.db.Write(s.wo, wb); err != nil {
+		return err
+	}
+
+	// canonical tail has changed; invalidate cache
+	s.lastCanonValid = false
+	s.lastCanonHeight = 0
+	s.lastCanonTs = 0
+
+	return nil
 }
 
 // GetCanonicalHash gets canonical block hash at height n.
@@ -544,4 +642,62 @@ func (s *RocksStore) getStoredGapRuleSec() (int64, bool, error) {
 
 func (s *RocksStore) setStoredGapRuleSec(sec int64) error {
 	return s.db.Put(s.wo, KeyGapRuleSec(), encodeI64BE(sec))
+}
+
+func (s *RocksStore) validateGapAtHeight(h int64, headNum int64, gapSec int64) (bool, error) {
+	if h <= 1 || h > headNum {
+		return false, nil
+	}
+	// canonical must exist at h
+	_, okHash, err := s.GetCanonicalHash(h)
+	if err != nil {
+		return false, err
+	}
+	if !okHash {
+		return false, nil
+	}
+
+	ts1, ok1, err := s.GetCanonicalTimestamp(h - 1)
+	if err != nil || !ok1 {
+		return false, err
+	}
+	ts2, ok2, err := s.GetCanonicalTimestamp(h)
+	if err != nil || !ok2 {
+		return false, err
+	}
+	return (ts2 - ts1) > gapSec, nil
+}
+
+func (s *RocksStore) findFirstGapAfterPos(pos int64, headNum int64, gapSec int64, targetTs int64) (gapHeight int64, gapEndTs int64, ok bool, err error) {
+	if pos < 1 {
+		pos = 1
+	}
+	if pos >= headNum {
+		return 0, 0, false, nil
+	}
+
+	prevTs, okTs, err := s.GetCanonicalTimestamp(pos)
+	if err != nil {
+		return 0, 0, false, err
+	}
+	if !okTs {
+		return 0, 0, false, nil
+	}
+
+	for n := pos + 1; n <= headNum; n++ {
+		ts, ok, err := s.GetCanonicalTimestamp(n)
+		if err != nil {
+			return 0, 0, false, err
+		}
+		if !ok {
+			return 0, 0, false, nil
+		}
+		if ts-prevTs > gapSec {
+			// lazy index rebuild: record this gap event for current rule
+			_ = s.db.Put(s.wo, KeyGapEndTS(gapSec, ts), encodeI64BE(n))
+			return n, ts, true, nil
+		}
+		prevTs = ts
+	}
+	return 0, 0, false, nil
 }

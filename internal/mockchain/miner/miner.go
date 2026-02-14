@@ -34,11 +34,11 @@ func NewMiner(st *store.RocksStore, txgen *generator.TxGen, rf *rng.Factory, tic
 	}
 }
 
-func (m *Miner) Warmup(backfillSec int64, gapSec int64) error {
+func (m *Miner) Warmup(backfillSec int64) error {
 	start := time.Now()
-
+	gapSec := m.store.GapRuleSec()
 	if backfillSec <= 0 {
-		log.Printf("[warmup] skip: backfillSec=%d gapSec=%d tick=%s", backfillSec, gapSec, m.tick)
+		log.Printf("[warmup] skip: backfillSec=%d gapSec=%d tick=%s", backfillSec, m.store.GapRuleSec(), m.tick)
 		return nil
 	}
 
@@ -46,15 +46,12 @@ func (m *Miner) Warmup(backfillSec int64, gapSec int64) error {
 	if step <= 0 {
 		step = 1
 	}
-	if gapSec <= 0 {
-		// 连续阈值建议绑 tick，别用很大的秒数
-		gapSec = 3 * step
-	}
+
 	log.Printf("[warmup] begin: backfillSec=%d gapSec=%d tick=%s step=%ds", backfillSec, gapSec, m.tick, step)
 
 	// 1) 决策：REBUILD / TRIM / KEEP_ALL
 	curTs := time.Now().Unix()
-	action, keep, err := m.store.DecideTailAction(curTs, backfillSec, gapSec)
+	action, keep, err := m.store.DecideTailAction(curTs, backfillSec)
 	if err != nil {
 		log.Printf("[warmup] decide_tail_action failed: curTs=%d backfillSec=%d gapSec=%d err=%v", curTs, backfillSec, gapSec, err)
 		return err
@@ -96,19 +93,25 @@ func (m *Miner) Warmup(backfillSec int64, gapSec int64) error {
 	}
 	log.Printf("[warmup] head_loaded: hasHead=%v nextNum=%d lastTs=%d parent=%s", hasHead, nextNum, lastTs, parentHash.Hex())
 
-	// 3) 决定 warmup 起点时间 ts
-	// - 如果是空库（或刚 rebuild），从 now-backfillSec 开始造
-	// - 否则从 lastTs+step 开始补洞
-	ts := int64(0)
+	// 3) decide warmup start timestamp
+	now := time.Now().Unix()
+	minTs := now - backfillSec
+	if minTs < 0 {
+		minTs = 0
+	}
+
+	var ts int64
 	if !hasHead {
-		ts = time.Now().Unix() - backfillSec
-		if ts < 0 {
-			ts = 0
-		}
+		// empty or rebuilt: always start from backfill window
+		ts = minTs
 		log.Printf("[warmup] start_from_empty: ts=%d (now-backfillSec)", ts)
 	} else {
+		// KEEP_ALL_CATCH_UP or after trim: don't go earlier than backfill window
 		ts = lastTs + step
-		log.Printf("[warmup] start_from_last: ts=%d (lastTs+step)", ts)
+		if ts < minTs {
+			ts = minTs
+		}
+		log.Printf("[warmup] start_from_last: ts=%d (max(lastTs+step, now-backfillSec))", ts)
 	}
 
 	// 4) 动态追时间墙：只要 ts+step < dynamicNow，就继续“加速挖”

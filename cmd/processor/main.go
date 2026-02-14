@@ -23,7 +23,8 @@ func main() {
 		decodeWorker = flag.Int("decode-worker", 4, "number of decode workers")
 		decodeQueue  = flag.Int("decode-queue", 8192, "decode queue size")
 
-		ckptPath = flag.String("ckpt", "./data/processor.ckpt", "processor checkpoint path (reserved)")
+		ckptPath  = flag.String("ckpt", "./data/processor.ckpt", "processor checkpoint path (reserved)")
+		readyFifo = flag.String("ready-fifo", "./data/ready/processor.ready.fifo", "write one line to FIFO when ready")
 	)
 	flag.Parse()
 
@@ -31,9 +32,10 @@ func main() {
 	defer cancel()
 
 	cfg := processor.Config{
-		Brokers: *brokers,
-		Group:   *group,
-		Topic:   *topic,
+		ReadyFifo: *readyFifo,
+		Brokers:   *brokers,
+		Group:     *group,
+		Topic:     *topic,
 
 		SpoolPath:    *spoolPath,
 		DecodeWorker: *decodeWorker,

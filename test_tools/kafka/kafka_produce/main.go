@@ -22,7 +22,7 @@ func main() {
 
 	msg := &sarama.ProducerMessage{
 		Topic: "raw.events",
-		Key:   sarama.StringEncoder("test-key"),
+		Key:   sarama.StringEncoder("test_tools-key"),
 		Value: sarama.StringEncoder("hello sarama"),
 	}
 

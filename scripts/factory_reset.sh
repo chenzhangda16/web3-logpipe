@@ -20,6 +20,9 @@ APP_KILL_RE='/bin/(mockchain|fetcher|processor|writer)\b'
 
 # ----------------------------- PG defaults ------------------------------------
 PG_DSN="${PG_DSN:-postgres://web3:web3@127.0.0.1:5432/web3log?sslmode=disable}"
+PG_ADMIN_DSN="${PG_ADMIN_DSN:-postgres://chenchangda@127.0.0.1:5432/postgres?sslmode=disable}"
+PG_HOST="${PG_HOST:-127.0.0.1}"
+PG_PORT="${PG_PORT:-5432}"
 PG_DB_NAME="${PG_DB_NAME:-web3log}"
 PG_DB_OWNER="${PG_DB_OWNER:-web3}"
 
@@ -96,37 +99,20 @@ rm_kafka_project_storage() {
   rm -f "$LOG_DIR"/kafka.*.log "$LOG_DIR"/kafka.latest.log 2>/dev/null || true
 }
 
-dsn_to_admin() {
-  # Convert postgres://user:pass@host:port/db?x=y  -> .../postgres?x=y
-  # Also handle db missing by appending /postgres.
-  local dsn="$1"
-  if [[ "$dsn" =~ ^postgres:// ]]; then
-    # replace path part after host with /postgres
-    echo "$dsn" | sed -E 's#^(postgres://[^/]+)(/[^?]*)?(.*)$#\1/postgres\3#'
-  else
-    # Unknown DSN format; best-effort: append /postgres
-    echo "${dsn%/}/postgres"
-  fi
-}
-
 pg_reset_business_db() {
   if ! command -v psql >/dev/null 2>&1; then
     log "psql not found; skipping PG reset."
     return 0
   fi
 
-  local admin_dsn
-  admin_dsn="$(dsn_to_admin "$PG_DSN")"
-
-  log "Resetting Postgres DB: drop+create $PG_DB_NAME (owner=$PG_DB_OWNER)"
-  psql "$admin_dsn" -v ON_ERROR_STOP=1 <<SQL
+  log "Dropping Postgres DB: ${PG_DB_NAME}"
+    psql -v ON_ERROR_STOP=1 -h "$PG_HOST" -p "$PG_PORT" -d postgres <<SQL
 SELECT pg_terminate_backend(pid)
 FROM pg_stat_activity
 WHERE datname='${PG_DB_NAME}'
   AND pid <> pg_backend_pid();
 
 DROP DATABASE IF EXISTS "${PG_DB_NAME}";
-CREATE DATABASE "${PG_DB_NAME}" OWNER "${PG_DB_OWNER}";
 SQL
 }
 
@@ -151,13 +137,28 @@ main() {
   log "Re-bootstrap Kafka (ensure_kafka.sh)..."
   "$ROOT_DIR/scripts/ensure_kafka.sh"
 
-  if [[ "${FULL_RESET:-0}" == "1" ]]; then
-    log "FULL_RESET=1, nuking $ROOT_DIR/data"
-    rm -rf "$ROOT_DIR/data"
-    mkdir -p "$ROOT_DIR/data"
-  else
-    log "FULL_RESET disabled; skipping full data wipe"
-  fi
+  case "${FULL_RESET:-0}" in
+    2)
+      log "FULL_RESET=2, nuking entire $ROOT_DIR/data"
+      rm -rf "$ROOT_DIR/data"
+      mkdir -p "$ROOT_DIR/data"
+      ;;
+    1)
+      log "FULL_RESET=1, wiping $ROOT_DIR/data except mockchain.db"
+
+      # 先确保 data 存在
+      mkdir -p "$ROOT_DIR/data"
+
+      # 删除 data 下除 mockchain.db 之外的所有内容
+      find "$ROOT_DIR/data" -mindepth 1 -maxdepth 1 \
+        ! -path "$ROOT_DIR/data/mockchain.db" \
+        -exec rm -rf {} +
+
+      ;;
+    *)
+      log "FULL_RESET disabled; skipping full data wipe"
+      ;;
+  esac
 
   log "Done."
 }
