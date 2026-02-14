@@ -1,3 +1,3 @@
 ## Architecture
 
-mockchain -> fetcher -> Kafka -> processor -> writer -> PostgreSQL
+mockchain -> fetcher -> Kafka -> processor -> Kafka -> writer -> PostgreSQL
