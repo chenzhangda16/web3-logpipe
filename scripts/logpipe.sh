@@ -14,7 +14,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
 PID_DIR="./data/pids"
-LOG_DIR="./data/logs"
+LOG_DIR="./logs"
 PID_FILE="$PID_DIR/logpipe.pids"
 
 mkdir -p "$PID_DIR" "$LOG_DIR" ./bin

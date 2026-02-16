@@ -43,7 +43,7 @@ type Processor struct {
 func New(cfg Config) (*Processor, error) {
 	sp, err := ingest.NewFileSpool(cfg.SpoolPath)
 
-	disp := dispatcher.NewDispatcher(16)
+	disp := dispatcher.NewDispatcher(8192)
 	addrs := ids.NewAddressID(64, 1<<12)
 	tokens := ids.NewTokenID(32, 1<<10)
 	adapter := ingest.NewMockChainAdapter(addrs, tokens)

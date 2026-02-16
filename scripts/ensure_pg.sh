@@ -21,7 +21,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PID_DIR="${PID_DIR:-$ROOT_DIR/data/pids}"
-LOG_DIR="${LOG_DIR:-$ROOT_DIR/data/logs}"
+LOG_DIR="${LOG_DIR:-$ROOT_DIR/logs}"
 mkdir -p "$PID_DIR" "$LOG_DIR"
 
 PG_HOST="${PG_HOST:-127.0.0.1}"

@@ -84,21 +84,18 @@ func (r *Runner) handleMove(ctx context.Context, mv dispatcher.TxWinMarginInfo) 
 	return nil
 }
 
-func (r *Runner) addEdges(head int64) {
-	if head <= r.head {
+func (r *Runner) addEdges(newHead int64) {
+	if newHead <= r.head {
 		return
 	}
-	for i := r.tail; i < head; i++ {
+	for i := r.head; i < newHead; i++ {
 		ev := r.disp.Get(i)
-
 		from := uint32(ev.From)
 		to := uint32(ev.To)
 
-		// 1) 简单图：只保留连通关系（Tarjan 用）
 		r.ensureAdj(r.adj, from, to)
 		r.ensureAdj(r.rev, to, from)
 
-		// 2) 证据：边 -> idx 队列（可随时揪出该边所有交易）
 		k := edgeKey(from, to)
 		q := r.edgeEvidence[k]
 		if q == nil {
@@ -107,8 +104,7 @@ func (r *Runner) addEdges(head int64) {
 		}
 		q.Push(i)
 	}
-
-	r.head = head
+	r.head = newHead
 }
 
 func edgeKey(from, to uint32) uint64 {

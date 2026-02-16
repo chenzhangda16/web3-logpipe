@@ -90,10 +90,8 @@ func NewIngestor(
 		firstOffsetByPart: make(map[int32]int64),
 		firstSeenByPart:   make(map[int32]bool),
 
-		// 需求 1：blockTail 赋值为 4 个 0
 		blockTail: make([]uint32, 4),
 
-		// 需求 2：winTs 赋值为 60、300、3600、86400
 		winTs: []int64{60, 300, 3600, 86400},
 	}
 
@@ -247,12 +245,12 @@ func (ig *Ingestor) decodeLoop() {
 
 		<-ig.rbOutCh[reOffset%MaxGroutines]
 
-		ig.disp.WinMove(curTxTail, curTxHead, openWin)
-
 		if reOffset%100 == 0 {
 			log.Printf("[ingest] p=%d off=%d base=%d re=%d blk=%d tx=%d rawCh=%d",
 				rawMsg.Partition, rawMsg.Offset, base, reOffset, blk.Header.Number, len(blk.Txs), len(ig.rawCh))
 		}
+
+		ig.disp.WinMove(curTxTail, curTxHead, openWin, reOffset)
 
 		ig.rbOutCh[(reOffset+1)%MaxGroutines] <- struct{}{}
 	}

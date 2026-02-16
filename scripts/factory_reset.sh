@@ -29,7 +29,7 @@ PG_DB_OWNER="${PG_DB_OWNER:-web3}"
 # ----------------------------- Kafka defaults (align ensure_kafka.sh) ----------
 KAFKA_BROKERS="${KAFKA_BROKERS:-127.0.0.1:9092}"
 PID_DIR="${PID_DIR:-$ROOT_DIR/data/pids}"
-LOG_DIR="${LOG_DIR:-$ROOT_DIR/data/logs}"
+LOG_DIR="${LOG_DIR:-$ROOT_DIR/logs}"
 
 KAFKA_HOME="${KAFKA_HOME:-/opt/kafka_2.13-3.8.0}"
 KAFKA_SERVER_START="${KAFKA_SERVER_START:-$KAFKA_HOME/bin/kafka-server-start.sh}"

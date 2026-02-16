@@ -1,6 +1,10 @@
 package dispatcher
 
-import "github.com/chenzhangda16/web3-logpipe/internal/logpipe/event"
+import (
+	"log"
+
+	"github.com/chenzhangda16/web3-logpipe/internal/logpipe/event"
+)
 
 const MaxBlocksPerWindow = 172800
 const MaxTxPerBlock = 100
@@ -19,7 +23,7 @@ type Dispatcher struct {
 
 func NewDispatcher(initialCap int) *Dispatcher {
 	if initialCap <= 0 {
-		initialCap = 16
+		initialCap = 8192
 	}
 	disp := &Dispatcher{
 		log:           &[MaxTxPerWindow]event.TxEvent{},
@@ -35,12 +39,17 @@ func (d *Dispatcher) Append(ev event.TxEvent, idx int64) {
 	d.log[idx%MaxTxPerWindow] = ev
 }
 
-func (d *Dispatcher) WinMove(txTail []int64, txHead int64, openWin bool) {
+func (d *Dispatcher) WinMove(txTail []int64, txHead int64, openWin bool, offset int64) {
 	for i := range d.winMoveRecord {
 		d.winMoveRecord[i] <- TxWinMarginInfo{
 			TxHead:  txHead,
 			TxTail:  txTail[i],
 			OpenWin: openWin,
+		}
+	}
+	if offset%1000 == 0 {
+		for i := range d.winMoveRecord {
+			log.Printf("[win] ch[%d]=%d/%d", i, len(d.winMoveRecord[i]), cap(d.winMoveRecord[i]))
 		}
 	}
 }

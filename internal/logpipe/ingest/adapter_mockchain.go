@@ -1,7 +1,10 @@
 package ingest
 
 import (
+	"log"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/chenzhangda16/web3-logpipe/internal/logpipe/event"
 	"github.com/chenzhangda16/web3-logpipe/internal/logpipe/ids"
@@ -15,6 +18,38 @@ type MockChainAdapter struct {
 	// 可选：统计丢弃量
 	DropBadAddr bool
 	DropNoToken bool
+}
+
+var emitInFlight int64
+var emitMaxInFlight int64
+var emitLastLog int64 // unix nano
+
+func emitEnter() {
+	cur := atomic.AddInt64(&emitInFlight, 1)
+
+	// 更新 max
+	for {
+		maxn := atomic.LoadInt64(&emitMaxInFlight)
+		if cur <= maxn {
+			break
+		}
+		if atomic.CompareAndSwapInt64(&emitMaxInFlight, maxn, cur) {
+			break
+		}
+	}
+}
+
+func emitExit() {
+	atomic.AddInt64(&emitInFlight, -1)
+
+	// 每 1s 打一次（避免刷屏）
+	now := time.Now().UnixNano()
+	last := atomic.LoadInt64(&emitLastLog)
+	if now-last > int64(time.Second) && atomic.CompareAndSwapInt64(&emitLastLog, last, now) {
+		cur := atomic.LoadInt64(&emitInFlight)
+		maxn := atomic.LoadInt64(&emitMaxInFlight)
+		log.Printf("[emit] inflight=%d max=%d", cur, maxn)
+	}
 }
 
 func NewMockChainAdapter(addrs *ids.AddressID, tokens *ids.TokenID) *MockChainAdapter {
@@ -32,6 +67,8 @@ func (a *MockChainAdapter) EmitTxEventsFromBlock(
 	emit func(ev event.TxEvent, idx int64),
 	parts int, // <=1: linear; >1: chunk-parallel
 ) {
+	//emitEnter()
+	//defer emitExit()
 	blockTs := blk.Header.Timestamp
 	txs := blk.Txs
 	n := len(txs)
