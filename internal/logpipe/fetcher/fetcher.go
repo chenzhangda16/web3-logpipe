@@ -98,7 +98,100 @@ func (f *Fetcher) Run(ctx context.Context) error {
 	log.Printf("[fetcher] start: next_height=%d topic=%s rpc=%s brokers=%s",
 		next, f.cfg.Topic, f.cfg.RPCBaseURL, f.cfg.Brokers)
 
+	// ---- perf sampler (1s) ----
+	type perf struct {
+		loops  int64
+		pages  int64
+		blocks int64
+		retryN int64
+
+		// "wait" for fetcher：只算显式 Sleep / 阻塞
+		sleepTotal time.Duration
+		maxSleep   time.Duration
+
+		// "work"：range + produce + ckpt 整体 wall-clock
+		workTotal time.Duration
+		maxWork   time.Duration
+
+		// breakdown
+		rpcTotal  time.Duration // BlocksRange + ChainHead
+		maxRPC    time.Duration // max of BlocksRange
+		headTotal time.Duration
+		maxHead   time.Duration
+		headCalls int64
+
+		prodTotal time.Duration
+		maxProd   time.Duration
+
+		ckptTotal time.Duration
+		maxCkpt   time.Duration
+	}
+
+	var p perf
+	sampleStart := time.Now()
+
+	sleep := func(d time.Duration) {
+		if d <= 0 {
+			return
+		}
+		time.Sleep(d)
+		p.sleepTotal += d
+		if d > p.maxSleep {
+			p.maxSleep = d
+		}
+	}
+
+	avg := func(d time.Duration, n int64) time.Duration {
+		if n <= 0 {
+			return 0
+		}
+		return time.Duration(int64(d) / n)
+	}
+
+	flush := func(now time.Time) {
+		elapsed := now.Sub(sampleStart)
+		if elapsed <= 0 {
+			return
+		}
+
+		total := p.sleepTotal + p.workTotal
+		busyPct := 0.0
+		if total > 0 {
+			busyPct = float64(p.workTotal) / float64(total) * 100.0
+		}
+
+		pps := 0.0
+		bps := 0.0
+		if elapsed.Seconds() > 0 {
+			pps = float64(p.pages) / elapsed.Seconds()
+			bps = float64(p.blocks) / elapsed.Seconds()
+		}
+
+		log.Printf(
+			"[fetcher][perf] loops=%d pages=%d blocks=%d retries=%d busy=%.1f%% pps=%.1f bps=%.1f "+
+				"avg_sleep=%s avg_work=%s "+
+				"avg_range=%s avg_prod=%s avg_ckpt=%s "+
+				"avg_head=%s head_calls=%d "+
+				"max_sleep=%s max_work=%s max_range=%s max_prod=%s max_ckpt=%s max_head=%s "+
+				"elapsed=%s",
+			p.loops, p.pages, p.blocks, p.retryN, busyPct, pps, bps,
+			avg(p.sleepTotal, p.loops), avg(p.workTotal, p.loops),
+			avg(p.rpcTotal-p.headTotal, p.pages), // 仅 range 的均值（rpcTotal 里含 head，所以减掉 headTotal）
+			avg(p.prodTotal, p.blocks),
+			avg(p.ckptTotal, p.blocks),
+			avg(p.headTotal, p.headCalls), p.headCalls,
+			p.maxSleep, p.maxWork, p.maxRPC, p.maxProd, p.maxCkpt, p.maxHead,
+			elapsed,
+		)
+
+		p = perf{}
+		sampleStart = now
+	}
+	// ---- end perf sampler ----
+
 	for {
+		p.loops++
+
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -107,7 +200,17 @@ func (f *Fetcher) Run(ctx context.Context) error {
 
 		// refresh head periodically
 		if time.Now().After(nextHeadPoll) {
+			t0 := time.Now()
 			h, err := f.rpc.ChainHead(ctx)
+			d := time.Since(t0)
+
+			p.rpcTotal += d
+			p.headTotal += d
+			p.headCalls++
+			if d > p.maxHead {
+				p.maxHead = d
+			}
+
 			if err != nil {
 				log.Printf("[fetcher] head poll err: %v", err)
 			} else {
@@ -118,103 +221,170 @@ func (f *Fetcher) Run(ctx context.Context) error {
 
 		// if head unknown, try fetch once
 		if headNum == 0 {
+			t0 := time.Now()
 			h, err := f.rpc.ChainHead(ctx)
+			d := time.Since(t0)
+
+			p.rpcTotal += d
+			p.headTotal += d
+			p.headCalls++
+			if d > p.maxHead {
+				p.maxHead = d
+			}
+
 			if err != nil {
 				log.Printf("[fetcher] head err: %v", err)
-				time.Sleep(f.cfg.IdleSleep)
+				sleep(f.cfg.IdleSleep)
+				if time.Since(sampleStart) >= time.Second {
+					flush(time.Now())
+				}
 				continue
 			}
 			headNum = h.HeadNum
 		}
 
 		if next > headNum {
-			time.Sleep(f.cfg.IdleSleep)
+			sleep(f.cfg.IdleSleep)
+			if time.Since(sampleStart) >= time.Second {
+				flush(time.Now())
+			}
 			continue
 		}
+
+		// ---- work starts (range + produce + ckpt) ----
+		workStart := time.Now()
 
 		to := next + int64(f.cfg.PageSize) - 1
 		if to > headNum {
 			to = headNum
 		}
 
+		// RPC: BlocksRange timing
+		tRPC0 := time.Now()
 		rangeResp, err := f.rpc.BlocksRange(ctx, next, to)
+		tRPC := time.Since(tRPC0)
+
+		p.rpcTotal += tRPC
+		p.pages++
+		if tRPC > p.maxRPC {
+			p.maxRPC = tRPC
+		}
+
 		if err != nil {
 			log.Printf("[fetcher] range err: from=%d to=%d err=%v", next, to, err)
-			time.Sleep(500 * time.Millisecond)
+			sleep(500 * time.Millisecond)
+
+			// work end
+			workDur := time.Since(workStart)
+			p.workTotal += workDur
+			if workDur > p.maxWork {
+				p.maxWork = workDur
+			}
+
+			if time.Since(sampleStart) >= time.Second {
+				flush(time.Now())
+			}
 			continue
 		}
 
 		blocks := rangeResp.Blocks
 		if len(blocks) == 0 {
-			// If server says partial but returns nothing, don't advance.
-			// Backoff and retry; also refresh head soon.
 			if rangeResp.Partial {
 				log.Printf("[fetcher] range partial but empty: from=%d to=%d last_ok=%d", next, to, rangeResp.LastOK)
 			}
-			time.Sleep(f.cfg.IdleSleep)
+			sleep(f.cfg.IdleSleep)
+
+			// work end
+			workDur := time.Since(workStart)
+			p.workTotal += workDur
+			if workDur > p.maxWork {
+				p.maxWork = workDur
+			}
+
+			if time.Since(sampleStart) >= time.Second {
+				flush(time.Now())
+			}
 			continue
 		}
 
-		// Produce blocks sequentially (keeps deterministic order)
 		producedAny := false
 		for _, b := range blocks {
 			if b.Header.Number < next {
 				continue
 			}
-			// If there is a gap in returned blocks, stop and retry from 'next'.
-			// This avoids silently skipping missing heights.
 			if b.Header.Number > next {
 				log.Printf("[fetcher] gap in server response: expected=%d got=%d (from=%d to=%d partial=%v last_ok=%d)",
 					next, b.Header.Number, rangeResp.From, rangeResp.To, rangeResp.Partial, rangeResp.LastOK)
 				break
 			}
 
-			if err := retry.Do(ctx, retry.Policy{
+			// Produce timing (includes retry wrapper)
+			tProd0 := time.Now()
+			err := retry.Do(ctx, retry.Policy{
 				MaxAttempts: 5,
 				BaseDelay:   100 * time.Millisecond,
 				MaxDelay:    5 * time.Second,
 				Jitter:      100 * time.Millisecond,
 				OnRetry: func(attempt int, wait time.Duration, err error) {
+					p.retryN++
 					log.Printf("[fetcher] produce retry: attempt=%d wait=%s err=%v", attempt, wait, err)
 				},
-				// Classify: 你后面可以按 sarama 错误类型细分；先 nil 也行（全都重试）
 			}, func(ctx context.Context) error {
 				return f.prod.ProduceBlock(ctx, b)
-			}); err != nil {
+			})
+			tProd := time.Since(tProd0)
+
+			p.prodTotal += tProd
+			if tProd > p.maxProd {
+				p.maxProd = tProd
+			}
+
+			if err != nil {
 				log.Printf("[fetcher] produce err: height=%d err=%v", b.Header.Number, err)
-				time.Sleep(300 * time.Millisecond)
+				sleep(300 * time.Millisecond)
 				break
 			}
 
-			// checkpoint after each successful produce
+			// Checkpoint timing
+			tC0 := time.Now()
 			if err := f.ckpt.Save(Ckpt{
 				LastHeight: b.Header.Number,
 				LastHash:   b.Hash.Hex(),
 			}); err != nil {
 				log.Printf("[fetcher] checkpoint save err: %v", err)
 			}
+			tC := time.Since(tC0)
 
+			p.ckptTotal += tC
+			if tC > p.maxCkpt {
+				p.maxCkpt = tC
+			}
+
+			p.blocks++
 			producedAny = true
 			next = b.Header.Number + 1
 		}
 
-		// If server marked partial, we should be conservative:
-		// - If we produced up to lastProduced, continue from next (already advanced).
-		// - If we produced nothing, but server has last_ok >= next-1, we can advance to last_ok+1.
 		if rangeResp.Partial {
-			// produced nothing (e.g., decode ok but gap/produce error happened before first block)
 			if !producedAny {
 				if rangeResp.LastOK >= next {
-					// NOTE: next here is still the original 'next' because we didn't advance.
-					// To be safe, only advance if last_ok is at/after expected next.
 					log.Printf("[fetcher] partial advance by last_ok: next=%d last_ok=%d", next, rangeResp.LastOK)
 					next = rangeResp.LastOK + 1
 				} else {
-					// can't advance, retry
-					time.Sleep(200 * time.Millisecond)
+					sleep(200 * time.Millisecond)
 				}
 			}
-			// if produced some blocks, next already advanced; just continue
+		}
+
+		// work end
+		workDur := time.Since(workStart)
+		p.workTotal += workDur
+		if workDur > p.maxWork {
+			p.maxWork = workDur
+		}
+
+		if time.Since(sampleStart) >= time.Second {
+			flush(time.Now())
 		}
 	}
 }

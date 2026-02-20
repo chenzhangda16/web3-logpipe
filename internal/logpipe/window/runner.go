@@ -2,6 +2,8 @@ package window
 
 import (
 	"context"
+	"log"
+	"time"
 
 	"github.com/chenzhangda16/web3-logpipe/internal/logpipe/dispatcher"
 	"github.com/chenzhangda16/web3-logpipe/internal/logpipe/out"
@@ -42,20 +44,123 @@ func NewRunner(winIdx int, disp *dispatcher.Dispatcher, sink out.Sink, allOpen *
 	}
 }
 
+//func (r *Runner) Run(ctx context.Context) error {
+//	ch := r.disp.WinMoveCh(r.winIdx)
+//
+//	for {
+//		select {
+//		case <-ctx.Done():
+//			return ctx.Err()
+//		case mv, ok := <-ch:
+//			if !ok {
+//				return nil
+//			}
+//			if err := r.handleMove(ctx, mv); err != nil {
+//				return err
+//			}
+//		}
+//	}
+//}
+
 func (r *Runner) Run(ctx context.Context) error {
 	ch := r.disp.WinMoveCh(r.winIdx)
+
+	// ---- perf counters (per 1s) ----
+	var (
+		winStart = time.Now()
+
+		waitNs int64
+		workNs int64
+		nMoves int64
+
+		maxWait time.Duration
+		maxWork time.Duration
+	)
+
+	flush := func(now time.Time) {
+		elapsed := now.Sub(winStart)
+		if elapsed <= 0 {
+			return
+		}
+		totalNs := waitNs + workNs
+		// wall clock 基准用 elapsed，更符合“我这一秒到底忙不忙”
+		busy := float64(workNs) / float64(elapsed.Nanoseconds())
+		if busy < 0 {
+			busy = 0
+		}
+		if busy > 1 {
+			busy = 1
+		}
+
+		avgWait := time.Duration(0)
+		avgWork := time.Duration(0)
+		if nMoves > 0 {
+			avgWait = time.Duration(waitNs / nMoves)
+			avgWork = time.Duration(workNs / nMoves)
+		}
+
+		log.Printf("[win][perf] idx=%d moves=%d busy=%.1f%% avg_wait=%s avg_work=%s max_wait=%s max_work=%s elapsed=%s total_sample=%s",
+			r.winIdx,
+			nMoves,
+			busy*100,
+			avgWait,
+			avgWork,
+			maxWait,
+			maxWork,
+			elapsed,
+			time.Duration(totalNs),
+		)
+
+		// reset window
+		winStart = now
+		waitNs, workNs, nMoves = 0, 0, 0
+		maxWait, maxWork = 0, 0
+	}
+
+	nextFlush := time.Now().Add(1 * time.Second)
 
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case mv, ok := <-ch:
-			if !ok {
-				return nil
-			}
-			if err := r.handleMove(ctx, mv); err != nil {
-				return err
-			}
+
+		default:
+			// 这里不要忙等，让下面的 `<-ch` 去阻塞并被计入 wait
+		}
+
+		// ---- measure wait (time blocked on receive) ----
+		tWait0 := time.Now()
+		mv, ok := <-ch
+		w := time.Since(tWait0)
+		waitNs += w.Nanoseconds()
+		if w > maxWait {
+			maxWait = w
+		}
+
+		if !ok {
+			// 最后再 flush 一次
+			flush(time.Now())
+			return nil
+		}
+
+		// ---- measure work ----
+		tWork0 := time.Now()
+		if err := r.handleMove(ctx, mv); err != nil {
+			flush(time.Now())
+			return err
+		}
+		ww := time.Since(tWork0)
+		workNs += ww.Nanoseconds()
+		if ww > maxWork {
+			maxWork = ww
+		}
+
+		nMoves++
+
+		now := time.Now()
+		if now.After(nextFlush) {
+			flush(now)
+			nextFlush = now.Add(1 * time.Second)
 		}
 	}
 }
