@@ -25,6 +25,9 @@ type Config struct {
 	IdleSleep     time.Duration
 
 	CheckpointPath string
+
+	RPCConcurrency int   // 上游 worker 数（P）
+	Partitions     int32 // Kafka 分区数（用于 height%P）
 }
 
 type Fetcher struct {
