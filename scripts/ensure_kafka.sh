@@ -243,15 +243,38 @@ topic_exists() {
   "$KAFKA_TOPICS_SH" --bootstrap-server "$KAFKA_BROKERS" --list | grep -qx "$topic"
 }
 
+topic_partitions() {
+  local topic="$1"
+  # Parse "PartitionCount:" from --describe output
+  "$KAFKA_TOPICS_SH" --bootstrap-server "$KAFKA_BROKERS" --describe --topic "$topic" 2>/dev/null \
+    | awk -F'PartitionCount:' 'NR==1{print $2}' \
+    | awk '{print $1}' \
+    | tr -d '\r'
+}
+
 ensure_topic() {
-  local topic="$1" partitions="$2"
-  topic_exists "$topic" && return 0
-  kafkalog "Creating topic: $topic (partitions=$partitions)"
-  "$KAFKA_TOPICS_SH" --bootstrap-server "$KAFKA_BROKERS" \
-    --create --if-not-exists \
-    --topic "$topic" \
-    --partitions "$partitions" \
-    --replication-factor 1 >/dev/null
+  local topic="$1" desired="$2"
+
+  if ! topic_exists "$topic"; then
+    kafkalog "Creating topic: $topic (partitions=$desired)"
+    "$KAFKA_TOPICS_SH" --bootstrap-server "$KAFKA_BROKERS" \
+      --create --if-not-exists \
+      --topic "$topic" \
+      --partitions "$desired" \
+      --replication-factor 1 >/dev/null
+    return 0
+  fi
+
+  # exists: ensure partitions >= desired
+  local cur
+  cur="$(topic_partitions "$topic")"
+  # If parse failed, do nothing but keep it safe (you can add log later)
+  [[ "$cur" =~ ^[0-9]+$ ]] || return 0
+
+  if (( cur < desired )); then
+    "$KAFKA_TOPICS_SH" --bootstrap-server "$KAFKA_BROKERS" \
+      --alter --topic "$topic" --partitions "$desired" >/dev/null
+  fi
 }
 
 ensure_topics() {

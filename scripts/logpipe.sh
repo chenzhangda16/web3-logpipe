@@ -40,6 +40,7 @@ export PG_DSN="postgres://${PG_DB_USER:-web3}:${PG_DB_PASS:-web3}@${PG_HOST:-127
 
 : "${KAFKA_BROKERS:=127.0.0.1:9092}"
 : "${KAFKA_TOPIC:=mockchain.blocks}"
+: "${KAFKA_IN_PARTITIONS:=4}"
 
 : "${FETCH_BACKFILL_SEC:=86400}"
 : "${FETCH_PAGE:=200}"
@@ -55,6 +56,7 @@ export PG_DSN="postgres://${PG_DB_USER:-web3}:${PG_DB_PASS:-web3}@${PG_HOST:-127
 : "${PROC_CKPT:=./data/processor.ckpt}"
 
 : "${OUT_TOPIC:=logpipe.out}"
+: "${KAFKA_OUT_PARTITIONS:=1}"
 : "${WRITER_GROUP:=logpipe.writer}"
 
 : "${NO_BUILD:=false}"
@@ -404,6 +406,11 @@ start() {
   trap 'cleanup_start; exit 1' ERR INT TERM
 
   source ./scripts/ensure_pg.sh
+
+  export IN_TOPIC="$KAFKA_TOPIC"
+  export OUT_TOPIC="$OUT_TOPIC"
+  export KAFKA_IN_PARTITIONS="$KAFKA_IN_PARTITIONS"
+  export KAFKA_OUT_PARTITIONS="$KAFKA_OUT_PARTITIONS"
   source ./scripts/ensure_kafka.sh
 
   need_cmd curl
