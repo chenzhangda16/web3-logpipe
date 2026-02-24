@@ -33,10 +33,19 @@ type Config struct {
 type Fetcher struct {
 	cfg Config
 
-	rpc   *RPCClient
-	prod  *Producer
-	ckpt  Checkpoint
-	close func() error
+	p perf
+
+	nextHeadPoll time.Time
+	reqCh        chan pageReq
+	rpc          *RPCClient
+	prod         *Producer
+	ckpt         Checkpoint
+	close        func() error
+}
+
+type pageReq struct {
+	from int64
+	to   int64
 }
 
 func New(cfg Config) (*Fetcher, error) {
@@ -72,10 +81,11 @@ func New(cfg Config) (*Fetcher, error) {
 	}
 
 	f := &Fetcher{
-		cfg:  cfg,
-		rpc:  rpc,
-		prod: prod,
-		ckpt: ckpt,
+		cfg:   cfg,
+		rpc:   rpc,
+		prod:  prod,
+		ckpt:  ckpt,
+		reqCh: make(chan pageReq, cfg.RPCConcurrency*4),
 	}
 	f.close = func() error {
 		_ = prod.Close()
@@ -176,24 +186,69 @@ func (p *perf) flush(now time.Time) {
 	}
 }
 
+func (f *Fetcher) schedule(ctx context.Context, next, chainHead int64) {
+	ticker := time.NewTicker(f.cfg.PollHeadEvery)
+	defer ticker.Stop()
+	to := min(next+int64(f.cfg.PageSize)-1, chainHead)
+	headCh := make(chan struct{}, 1)
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				t0 := time.Now()
+				h, err := f.rpc.ChainHead(ctx)
+				d := time.Since(t0)
+
+				f.p.rpcTotal += d
+				f.p.headTotal += d
+				f.p.headCalls++
+				if d > f.p.maxHead {
+					f.p.maxHead = d
+				}
+
+				if err != nil {
+					log.Printf("[fetcher] head poll err: %v", err)
+				} else {
+					chainHead = h.HeadNum
+					if chainHead > to {
+						headCh <- struct{}{}
+					}
+				}
+			}
+		}
+	}()
+	for {
+		if next > chainHead {
+			select {
+			case <-ctx.Done():
+				return
+			case <-headCh:
+			}
+		}
+
+		to := min(next+int64(f.cfg.PageSize)-1, chainHead)
+		f.reqCh <- pageReq{from: next, to: to}
+		next = to + 1
+	}
+}
+
 func (f *Fetcher) Run(ctx context.Context) error {
-	start, err := f.decideStartHeight(ctx)
+	startH, chainHead, err := f.decideStartHeight(ctx)
 	if err != nil {
 		return err
 	}
-	next := start
 
-	var headNum int64 = 0
-	nextHeadPoll := time.Now()
+	f.nextHeadPoll = time.Now()
 
 	log.Printf("[fetcher] start: next_height=%d topic=%s rpc=%s brokers=%s",
-		next, f.cfg.Topic, f.cfg.RPCBaseURL, f.cfg.Brokers)
+		startH, f.cfg.Topic, f.cfg.RPCBaseURL, f.cfg.Brokers)
 
-	var p perf
-	p.sampleStart = time.Now()
+	f.p.sampleStart = time.Now()
 
 	for {
-		p.loops++
+		f.p.loops++
 
 		select {
 		case <-ctx.Done():
@@ -201,87 +256,31 @@ func (f *Fetcher) Run(ctx context.Context) error {
 		default:
 		}
 
-		// refresh head periodically
-		if time.Now().After(nextHeadPoll) {
-			t0 := time.Now()
-			h, err := f.rpc.ChainHead(ctx)
-			d := time.Since(t0)
-
-			p.rpcTotal += d
-			p.headTotal += d
-			p.headCalls++
-			if d > p.maxHead {
-				p.maxHead = d
-			}
-
-			if err != nil {
-				log.Printf("[fetcher] head poll err: %v", err)
-			} else {
-				headNum = h.HeadNum
-			}
-			nextHeadPoll = time.Now().Add(f.cfg.PollHeadEvery)
-		}
-
-		if headNum == 0 {
-			t0 := time.Now()
-			h, err := f.rpc.ChainHead(ctx)
-			d := time.Since(t0)
-
-			p.rpcTotal += d
-			p.headTotal += d
-			p.headCalls++
-			if d > p.maxHead {
-				p.maxHead = d
-			}
-
-			if err != nil {
-				log.Printf("[fetcher] head err: %v", err)
-				p.sleep(f.cfg.IdleSleep)
-				if time.Since(p.sampleStart) >= time.Second {
-					p.flush(time.Now())
-				}
-				continue
-			}
-			headNum = h.HeadNum
-		}
-
-		if next > headNum {
-			p.sleep(f.cfg.IdleSleep)
-			if time.Since(p.sampleStart) >= time.Second {
-				p.flush(time.Now())
-			}
-			continue
-		}
-
+		f.schedule(ctx, startH, chainHead)
 		workStart := time.Now()
-
-		to := next + int64(f.cfg.PageSize) - 1
-		if to > headNum {
-			to = headNum
-		}
 
 		tRPC0 := time.Now()
 		rangeResp, err := f.rpc.BlocksRange(ctx, next, to)
 		tRPC := time.Since(tRPC0)
 
-		p.rpcTotal += tRPC
-		p.pages++
-		if tRPC > p.maxRPC {
-			p.maxRPC = tRPC
+		f.p.rpcTotal += tRPC
+		f.p.pages++
+		if tRPC > f.p.maxRPC {
+			f.p.maxRPC = tRPC
 		}
 
 		if err != nil {
 			log.Printf("[fetcher] range err: from=%d to=%d err=%v", next, to, err)
-			p.sleep(500 * time.Millisecond)
+			f.p.sleep(500 * time.Millisecond)
 
 			workDur := time.Since(workStart)
-			p.workTotal += workDur
-			if workDur > p.maxWork {
-				p.maxWork = workDur
+			f.p.workTotal += workDur
+			if workDur > f.p.maxWork {
+				f.p.maxWork = workDur
 			}
 
-			if time.Since(p.sampleStart) >= time.Second {
-				p.flush(time.Now())
+			if time.Since(f.p.sampleStart) >= time.Second {
+				f.p.flush(time.Now())
 			}
 			continue
 		}
@@ -292,16 +291,16 @@ func (f *Fetcher) Run(ctx context.Context) error {
 				log.Printf("[fetcher] range partial but empty: from=%d to=%d last_ok=%d",
 					next, to, rangeResp.LastOK)
 			}
-			p.sleep(f.cfg.IdleSleep)
+			f.p.sleep(f.cfg.IdleSleep)
 
 			workDur := time.Since(workStart)
-			p.workTotal += workDur
-			if workDur > p.maxWork {
-				p.maxWork = workDur
+			f.p.workTotal += workDur
+			if workDur > f.p.maxWork {
+				f.p.maxWork = workDur
 			}
 
-			if time.Since(p.sampleStart) >= time.Second {
-				p.flush(time.Now())
+			if time.Since(f.p.sampleStart) >= time.Second {
+				f.p.flush(time.Now())
 			}
 			continue
 		}
@@ -324,7 +323,7 @@ func (f *Fetcher) Run(ctx context.Context) error {
 				MaxDelay:    5 * time.Second,
 				Jitter:      100 * time.Millisecond,
 				OnRetry: func(attempt int, wait time.Duration, err error) {
-					p.retryN++
+					f.p.retryN++
 					log.Printf("[fetcher] produce retry: attempt=%d wait=%s err=%v",
 						attempt, wait, err)
 				},
@@ -333,15 +332,15 @@ func (f *Fetcher) Run(ctx context.Context) error {
 			})
 			tProd := time.Since(tProd0)
 
-			p.prodTotal += tProd
-			if tProd > p.maxProd {
-				p.maxProd = tProd
+			f.p.prodTotal += tProd
+			if tProd > f.p.maxProd {
+				f.p.maxProd = tProd
 			}
 
 			if err != nil {
 				log.Printf("[fetcher] produce err: height=%d err=%v",
 					b.Header.Number, err)
-				p.sleep(300 * time.Millisecond)
+				f.p.sleep(300 * time.Millisecond)
 				break
 			}
 
@@ -354,12 +353,12 @@ func (f *Fetcher) Run(ctx context.Context) error {
 			}
 			tC := time.Since(tC0)
 
-			p.ckptTotal += tC
-			if tC > p.maxCkpt {
-				p.maxCkpt = tC
+			f.p.ckptTotal += tC
+			if tC > f.p.maxCkpt {
+				f.p.maxCkpt = tC
 			}
 
-			p.blocks++
+			f.p.blocks++
 			producedAny = true
 			next = b.Header.Number + 1
 		}
@@ -369,27 +368,31 @@ func (f *Fetcher) Run(ctx context.Context) error {
 				if rangeResp.LastOK >= next {
 					next = rangeResp.LastOK + 1
 				} else {
-					p.sleep(200 * time.Millisecond)
+					f.p.sleep(200 * time.Millisecond)
 				}
 			}
 		}
 
 		workDur := time.Since(workStart)
-		p.workTotal += workDur
-		if workDur > p.maxWork {
-			p.maxWork = workDur
+		f.p.workTotal += workDur
+		if workDur > f.p.maxWork {
+			f.p.maxWork = workDur
 		}
 
-		if time.Since(p.sampleStart) >= time.Second {
-			p.flush(time.Now())
+		if time.Since(f.p.sampleStart) >= time.Second {
+			f.p.flush(time.Now())
 		}
 	}
 }
 
-func (f *Fetcher) decideStartHeight(ctx context.Context) (int64, error) {
+func (f *Fetcher) decideStartHeight(ctx context.Context) (int64, int64, error) {
+	head, err := f.rpc.ChainHead(ctx)
+	if err != nil {
+		return 0, 0, err
+	}
 	// A) checkpoint wins, but must be validated against canonical: (height, hash)
 	if ck, ok, err := f.ckpt.Load(); err != nil {
-		return 0, err
+		return 0, 0, err
 	} else if ok && ck.LastHeight > 0 {
 		if ck.LastHash == "" {
 			// strict: checkpoint without hash is treated as invalid
@@ -401,7 +404,7 @@ func (f *Fetcher) decideStartHeight(ctx context.Context) (int64, error) {
 				if equalHex(gotHash, ck.LastHash) {
 					next := ck.LastHeight + 1
 					log.Printf("[fetcher] resume from checkpoint: last=%d hash=%s next=%d", ck.LastHeight, ck.LastHash, next)
-					return next, nil
+					return next, head.HeadNum, nil
 				}
 				log.Printf("[fetcher] checkpoint hash mismatch -> cold start: last=%d ckpt_hash=%s got_hash=%s",
 					ck.LastHeight, ck.LastHash, gotHash)
@@ -414,18 +417,14 @@ func (f *Fetcher) decideStartHeight(ctx context.Context) (int64, error) {
 	}
 
 	// B) no valid checkpoint: use head + backfill if enabled
-	head, err := f.rpc.ChainHead(ctx)
-	if err != nil {
-		return 0, err
-	}
 	if head.Empty || head.HeadNum <= 0 {
-		return 1, fmt.Errorf("empty chain")
+		return 1, head.HeadNum, fmt.Errorf("empty chain")
 	}
 
 	// backfill disabled -> start at head (only tailing new blocks)
 	if f.cfg.BackfillSec < 0 {
 		log.Printf("[fetcher] no checkpoint, backfill disabled -> start from head=%d", head.HeadNum)
-		return head.HeadNum, nil
+		return head.HeadNum, head.HeadNum, nil
 	}
 
 	targetTs := head.HeadTimestamp - f.cfg.BackfillSec
@@ -436,13 +435,13 @@ func (f *Fetcher) decideStartHeight(ctx context.Context) (int64, error) {
 	pos, err := f.rpc.BlockAtOrAfter(ctx, targetTs)
 	if err != nil {
 		log.Printf("[fetcher] at-or-after failed -> fallback to 1: err=%v", err)
-		return 1, nil
+		return 1, 1, nil
 	}
 
 	log.Printf("[fetcher] cold start backfill: head_num=%d head_ts=%d target_ts=%d start_num=%d",
 		head.HeadNum, head.HeadTimestamp, targetTs, pos.BlockNum)
 
-	return pos.BlockNum, nil
+	return pos.BlockNum, head.HeadNum, nil
 }
 
 func equalHex(a, b string) bool {
