@@ -132,18 +132,14 @@ func (ig *Ingestor) ConsumeClaim(sess sarama.ConsumerGroupSession, claim sarama.
 
 		sess.MarkMessage(msg, "")
 
-		// 推荐：拷贝 Value，避免生命周期/复用风险
-		val := make([]byte, len(msg.Value))
+		val := getMsgBuf(len(msg.Value))
 		copy(val, msg.Value)
 
-		rm := RawMsg{
+		ig.rawCh <- RawMsg{
 			Partition: msg.Partition,
 			Offset:    msg.Offset,
 			Value:     val,
 		}
-
-		// 背压：直接阻塞写最清晰
-		ig.rawCh <- rm
 	}
 	return nil
 }
@@ -188,8 +184,10 @@ func (ig *Ingestor) decodeLoop() {
 		var blk mc.Block
 		if err := json.Unmarshal(rawMsg.Value, &blk); err != nil {
 			log.Printf("[ingest] decode block failed: p=%d off=%d err=%v", rawMsg.Partition, rawMsg.Offset, err)
+			putMsgBuf(rawMsg.Value)
 			continue
 		}
+		putMsgBuf(rawMsg.Value)
 		ig.testLog.Do(func() {
 			log.Printf("[ingest] blk head first %d.", blk.Header.Number)
 		})

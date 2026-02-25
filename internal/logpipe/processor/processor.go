@@ -41,27 +41,35 @@ type Processor struct {
 }
 
 func New(cfg Config) (*Processor, error) {
-	sp, err := ingest.NewFileSpool(cfg.SpoolPath)
+	sp, err := ingest.NewFileSpool(cfg.SpoolPath,
+		ingest.WithSpoolSyncEveryN(2000),
+		ingest.WithSpoolSyncEveryDur(20*time.Millisecond),
+	)
 
 	disp := dispatcher.NewDispatcher(8192)
 	addrs := ids.NewAddressID(64, 1<<12)
 	tokens := ids.NewTokenID(32, 1<<10)
 	adapter := ingest.NewMockChainAdapter(addrs, tokens)
 
-	client, err := sarama.NewClient(strings.Split(cfg.Brokers, ","), sarama.NewConfig())
+	kc := sarama.NewConfig()
+	kc.Version = sarama.V2_1_0_0
+
+	kc.Consumer.Fetch.Min = 1
+	kc.Consumer.Fetch.Default = 4 * 1024 * 1024
+	kc.Consumer.Fetch.Max = 32 * 1024 * 1024
+	kc.Consumer.MaxWaitTime = 50 * time.Millisecond
+	kc.Consumer.MaxProcessingTime = 500 * time.Millisecond
+	kc.Consumer.Offsets.AutoCommit.Interval = 2 * time.Second
+
+	client, err := sarama.NewClient(strings.Split(cfg.Brokers, ","), kc)
 	if err != nil {
 		return nil, err
 	}
 
-	cons, err := NewConsumerWithClient(client, cfg.Group)
-	if err != nil {
-		_ = client.Close()
-		return nil, err
-	}
-
+	cons, err := NewConsumerWithClient(client, cfg.Group) // 确保这里别覆盖 config
 	ig := ingest.NewIngestor(cfg.ReadyFifo, disp, sp, cfg.DecodeWorker, cfg.DecodeQueue, adapter, client, cfg.Topic)
 
-	sink, _ := out.NewKafkaSink([]string{"127.0.0.1:9092"}, "logpipe.out", sarama.NewConfig())
+	sink, _ := out.NewKafkaSink([]string{"127.0.0.1:9092"}, "logpipe.out", kc)
 
 	allOpen := false
 
