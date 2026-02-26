@@ -1,10 +1,12 @@
 package fetcher
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 )
 
 type Ckpt struct {
@@ -13,8 +15,8 @@ type Ckpt struct {
 }
 
 type Checkpoint interface {
-	Load() (ckpt Ckpt, ok bool, err error)
-	Save(ckpt Ckpt) error
+	load() (ckpt Ckpt, ok bool, err error)
+	save(ckpt Ckpt) error
 }
 
 type FileCheckpoint struct {
@@ -31,7 +33,7 @@ func NewFileCheckpoint(path string) (*FileCheckpoint, error) {
 	return &FileCheckpoint{path: path}, nil
 }
 
-func (c *FileCheckpoint) Load() (Ckpt, bool, error) {
+func (c *FileCheckpoint) load() (Ckpt, bool, error) {
 	b, err := os.ReadFile(c.path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -64,7 +66,7 @@ func (c *FileCheckpoint) Load() (Ckpt, bool, error) {
 	return Ckpt{LastHeight: h, LastHash: hashStr}, true, nil
 }
 
-func (c *FileCheckpoint) Save(ckpt Ckpt) error {
+func (c *FileCheckpoint) save(ckpt Ckpt) error {
 	tmp := c.path + ".tmp"
 
 	// new format: height + "\n" + hash + "\n"
@@ -75,4 +77,50 @@ func (c *FileCheckpoint) Save(ckpt Ckpt) error {
 		return err
 	}
 	return os.Rename(tmp, c.path)
+}
+
+func pushLatestCkpt(ch chan Ckpt, v Ckpt) {
+	select {
+	case ch <- v:
+		return
+	default:
+		select {
+		case <-ch:
+		default:
+		}
+		select {
+		case ch <- v:
+		default:
+		}
+	}
+}
+
+func ckptLoopPeriodic(ctx context.Context, ch <-chan Ckpt, ck Checkpoint, every time.Duration) error {
+	var pending *Ckpt
+	tk := time.NewTicker(every)
+	defer tk.Stop()
+
+	flush := func() error {
+		if pending == nil {
+			return nil
+		}
+		if err := ck.save(*pending); err != nil {
+			return err
+		}
+		pending = nil
+		return nil
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return flush()
+		case v := <-ch:
+			pending = &v
+		case <-tk.C:
+			if err := flush(); err != nil {
+				return err
+			}
+		}
+	}
 }

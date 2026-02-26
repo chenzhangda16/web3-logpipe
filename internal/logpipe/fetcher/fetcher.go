@@ -6,10 +6,13 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/chenzhangda16/web3-logpipe/internal/logpipe/retry"
 )
+
+var ErrRangeUnacceptable = errors.New("range response unacceptable")
 
 type Config struct {
 	RPCBaseURL string
@@ -22,21 +25,23 @@ type Config struct {
 	PageSize int
 
 	PollHeadEvery time.Duration
-	IdleSleep     time.Duration
 
 	CheckpointPath string
+	CheckpointTick time.Duration
 
-	RPCConcurrency int   // 上游 worker 数（P）
-	Partitions     int32 // Kafka 分区数（用于 height%P）
+	RPCConcurrency int // 上游 worker 数（P）
+	Partitions     int // Kafka 分区数（用于 height%P）
 }
 
 type Fetcher struct {
 	cfg Config
 
-	p perf
-
+	p            perf
+	errCh        chan error
 	nextHeadPoll time.Time
-	reqCh        chan pageReq
+	pgReqCh      chan pageReq
+	pgOutCh      []chan struct{}
+	pgRespCh     chan pageResp
 	rpc          *RPCClient
 	prod         *Producer
 	ckpt         Checkpoint
@@ -44,8 +49,14 @@ type Fetcher struct {
 }
 
 type pageReq struct {
+	seq  int64
 	from int64
 	to   int64
+}
+
+type pageResp struct {
+	seq  int64
+	resp BlocksRangeResp
 }
 
 func New(cfg Config) (*Fetcher, error) {
@@ -60,9 +71,6 @@ func New(cfg Config) (*Fetcher, error) {
 	}
 	if cfg.PollHeadEvery <= 0 {
 		cfg.PollHeadEvery = 2 * time.Second
-	}
-	if cfg.IdleSleep <= 0 {
-		cfg.IdleSleep = 300 * time.Millisecond
 	}
 	if cfg.CheckpointPath == "" {
 		cfg.CheckpointPath = "./data/fetcher.ckpt"
@@ -81,12 +89,17 @@ func New(cfg Config) (*Fetcher, error) {
 	}
 
 	f := &Fetcher{
-		cfg:   cfg,
-		rpc:   rpc,
-		prod:  prod,
-		ckpt:  ckpt,
-		reqCh: make(chan pageReq, cfg.RPCConcurrency*4),
+		cfg:      cfg,
+		rpc:      rpc,
+		prod:     prod,
+		ckpt:     ckpt,
+		pgReqCh:  make(chan pageReq, cfg.RPCConcurrency*4),
+		pgRespCh: make(chan pageResp, cfg.RPCConcurrency*4),
 	}
+	for i := 0; i < cfg.RPCConcurrency; i++ {
+		f.pgOutCh = append(f.pgOutCh, make(chan struct{}, 1))
+	}
+	f.pgOutCh[0] <- struct{}{}
 	f.close = func() error {
 		_ = prod.Close()
 		return nil
@@ -186,12 +199,13 @@ func (p *perf) flush(now time.Time) {
 	}
 }
 
-func (f *Fetcher) schedule(ctx context.Context, next, chainHead int64) {
-	ticker := time.NewTicker(f.cfg.PollHeadEvery)
-	defer ticker.Stop()
-	to := min(next+int64(f.cfg.PageSize)-1, chainHead)
-	headCh := make(chan struct{}, 1)
+func (f *Fetcher) pollHead(ctx context.Context) <-chan int64 {
+	ch := make(chan int64, 1)
+
 	go func() {
+		ticker := time.NewTicker(f.cfg.PollHeadEvery)
+		defer ticker.Stop()
+
 		for {
 			select {
 			case <-ctx.Done():
@@ -201,40 +215,155 @@ func (f *Fetcher) schedule(ctx context.Context, next, chainHead int64) {
 				h, err := f.rpc.ChainHead(ctx)
 				d := time.Since(t0)
 
-				f.p.rpcTotal += d
-				f.p.headTotal += d
-				f.p.headCalls++
-				if d > f.p.maxHead {
-					f.p.maxHead = d
-				}
+				// ⚠️ 这里先不碰 perf，避免并发写 f.p 的 race。
+				// 你想保留 head RPC 的统计，后面再统一做并发安全 stats。
 
 				if err != nil {
 					log.Printf("[fetcher] head poll err: %v", err)
-				} else {
-					chainHead = h.HeadNum
-					if chainHead > to {
-						headCh <- struct{}{}
+					continue
+				}
+
+				// non-blocking: 只保留最新 head
+				select {
+				case ch <- h.HeadNum:
+				default:
+					// channel 满：丢掉旧值，塞新值
+					select {
+					case <-ch:
+					default:
+					}
+					select {
+					case ch <- h.HeadNum:
+					default:
 					}
 				}
+
+				_ = d // 暂时不用，保留变量避免你以后加 perf 时再改结构
 			}
 		}
 	}()
+
+	return ch
+}
+
+func (f *Fetcher) schedule(ctx context.Context, next, chainHead int64) error {
+	headCh := f.pollHead(ctx)
+	seq := int64(0)
 	for {
-		if next > chainHead {
+		for next > chainHead {
 			select {
 			case <-ctx.Done():
-				return
-			case <-headCh:
+				return ctx.Err()
+			case hn := <-headCh:
+				if hn > chainHead {
+					chainHead = hn
+				}
 			}
 		}
 
 		to := min(next+int64(f.cfg.PageSize)-1, chainHead)
-		f.reqCh <- pageReq{from: next, to: to}
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case f.pgReqCh <- pageReq{seq: seq, from: next, to: to}:
+			seq++
+		}
+
 		next = to + 1
 	}
 }
 
-func (f *Fetcher) Run(ctx context.Context) error {
+func (f *Fetcher) getPage(ctx context.Context) error {
+	P := int64(f.cfg.RPCConcurrency)
+	var tSum time.Duration
+
+	for pgReq := range f.pgReqCh {
+		seq := pgReq.seq
+		next := pgReq.from
+		to := pgReq.to
+		lane := seq % P
+		nextLane := (seq + 1) % P
+
+		pgResp := pageResp{seq: seq}
+
+		err := retry.Do(ctx, retry.Policy{
+			MaxAttempts: 5,
+			BaseDelay:   100 * time.Millisecond,
+			MaxDelay:    5 * time.Second,
+			Jitter:      100 * time.Millisecond,
+			Classify: func(err error) retry.Class {
+				if errors.Is(err, ErrRangeUnacceptable) {
+					return retry.Retryable
+				}
+				// TODO: 你未来可以把某些错误判为 Fatal
+				return retry.Retryable
+			},
+			OnRetry: func(attempt int, wait time.Duration, err error) {
+				f.p.retryN++
+				log.Printf("[fetcher] range retry: attempt=%d wait=%s err=%v", attempt, wait, err)
+			},
+		}, func(ctx context.Context) error {
+			var err error
+			t0 := time.Now()
+			pgResp.resp, err = f.rpc.BlocksRange(ctx, next, to)
+			tSum += time.Since(t0)
+			if err != nil {
+				return err
+			}
+			if len(pgResp.resp.Blocks) == 0 && !pgResp.resp.Partial {
+				return ErrRangeUnacceptable
+			}
+			return nil
+		})
+
+		if err != nil {
+			return err
+		}
+
+		// 只有成功拿到 resp 才进入 lane/token 流程
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-f.pgOutCh[lane]:
+		}
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case f.pgRespCh <- pgResp:
+		}
+
+		// token 传递也要尊重 ctx，避免 cancel 时卡死
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case f.pgOutCh[nextLane] <- struct{}{}:
+		}
+	}
+	return nil
+}
+
+func (f *Fetcher) produceLoop(ctx context.Context) error {
+	for pgResp := range f.pgRespCh {
+		seq := pgResp.seq
+		for _, b := range pgResp.resp.Blocks {
+			if err := f.prod.ProduceBlockSinglePartition(ctx, b, seq); err != nil {
+				log.Printf("[fetcher] enqueue err: page=%d height=%d err=%v",
+					seq, b.Header.Number, err)
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (f *Fetcher) Run(parent context.Context) error {
+	ctx, cancel := context.WithCancel(parent)
+	defer cancel()
+	errCh := make(chan error, 1)
+	var wg sync.WaitGroup
+
 	startH, chainHead, err := f.decideStartHeight(ctx)
 	if err != nil {
 		return err
@@ -247,142 +376,79 @@ func (f *Fetcher) Run(ctx context.Context) error {
 
 	f.p.sampleStart = time.Now()
 
-	for {
-		f.p.loops++
-
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if err := f.schedule(ctx, startH, chainHead); err != nil {
+			select {
+			case errCh <- err:
+			default:
+			}
 		}
+	}()
 
-		f.schedule(ctx, startH, chainHead)
-		workStart := time.Now()
-
-		tRPC0 := time.Now()
-		rangeResp, err := f.rpc.BlocksRange(ctx, next, to)
-		tRPC := time.Since(tRPC0)
-
-		f.p.rpcTotal += tRPC
-		f.p.pages++
-		if tRPC > f.p.maxRPC {
-			f.p.maxRPC = tRPC
-		}
-
-		if err != nil {
-			log.Printf("[fetcher] range err: from=%d to=%d err=%v", next, to, err)
-			f.p.sleep(500 * time.Millisecond)
-
-			workDur := time.Since(workStart)
-			f.p.workTotal += workDur
-			if workDur > f.p.maxWork {
-				f.p.maxWork = workDur
-			}
-
-			if time.Since(f.p.sampleStart) >= time.Second {
-				f.p.flush(time.Now())
-			}
-			continue
-		}
-
-		blocks := rangeResp.Blocks
-		if len(blocks) == 0 {
-			if rangeResp.Partial {
-				log.Printf("[fetcher] range partial but empty: from=%d to=%d last_ok=%d",
-					next, to, rangeResp.LastOK)
-			}
-			f.p.sleep(f.cfg.IdleSleep)
-
-			workDur := time.Since(workStart)
-			f.p.workTotal += workDur
-			if workDur > f.p.maxWork {
-				f.p.maxWork = workDur
-			}
-
-			if time.Since(f.p.sampleStart) >= time.Second {
-				f.p.flush(time.Now())
-			}
-			continue
-		}
-
-		producedAny := false
-		for _, b := range blocks {
-			if b.Header.Number < next {
-				continue
-			}
-			if b.Header.Number > next {
-				log.Printf("[fetcher] gap in server response: expected=%d got=%d",
-					next, b.Header.Number)
-				break
-			}
-
-			tProd0 := time.Now()
-			err := retry.Do(ctx, retry.Policy{
-				MaxAttempts: 5,
-				BaseDelay:   100 * time.Millisecond,
-				MaxDelay:    5 * time.Second,
-				Jitter:      100 * time.Millisecond,
-				OnRetry: func(attempt int, wait time.Duration, err error) {
-					f.p.retryN++
-					log.Printf("[fetcher] produce retry: attempt=%d wait=%s err=%v",
-						attempt, wait, err)
-				},
-			}, func(ctx context.Context) error {
-				return f.prod.ProduceBlock(ctx, b)
-			})
-			tProd := time.Since(tProd0)
-
-			f.p.prodTotal += tProd
-			if tProd > f.p.maxProd {
-				f.p.maxProd = tProd
-			}
-
-			if err != nil {
-				log.Printf("[fetcher] produce err: height=%d err=%v",
-					b.Header.Number, err)
-				f.p.sleep(300 * time.Millisecond)
-				break
-			}
-
-			tC0 := time.Now()
-			if err := f.ckpt.Save(Ckpt{
-				LastHeight: b.Header.Number,
-				LastHash:   b.Hash.Hex(),
-			}); err != nil {
-				log.Printf("[fetcher] checkpoint save err: %v", err)
-			}
-			tC := time.Since(tC0)
-
-			f.p.ckptTotal += tC
-			if tC > f.p.maxCkpt {
-				f.p.maxCkpt = tC
-			}
-
-			f.p.blocks++
-			producedAny = true
-			next = b.Header.Number + 1
-		}
-
-		if rangeResp.Partial {
-			if !producedAny {
-				if rangeResp.LastOK >= next {
-					next = rangeResp.LastOK + 1
-				} else {
-					f.p.sleep(200 * time.Millisecond)
+	for i := 0; i < f.cfg.RPCConcurrency; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := f.getPage(ctx); err != nil {
+				select {
+				case errCh <- err:
+				default:
 				}
 			}
-		}
-
-		workDur := time.Since(workStart)
-		f.p.workTotal += workDur
-		if workDur > f.p.maxWork {
-			f.p.maxWork = workDur
-		}
-
-		if time.Since(f.p.sampleStart) >= time.Second {
-			f.p.flush(time.Now())
-		}
+		}()
 	}
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if err := f.produceLoop(ctx); err != nil {
+			select {
+			case errCh <- err:
+			default:
+			}
+		}
+	}()
+
+	ckptCh := make(chan Ckpt, 1)
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if err := ckptLoopPeriodic(ctx, ckptCh, f.ckpt, f.cfg.CheckpointTick); err != nil {
+			select {
+			case errCh <- err:
+			default:
+			}
+		}
+	}()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if err := f.barrierLoop(ctx, BarrierCfg{
+			PageSize:        f.cfg.PageSize,
+			AllowedLagPages: 1,
+		}, ckptCh); err != nil {
+			select {
+			case errCh <- err:
+			default:
+			}
+		}
+	}()
+
+	select {
+	case <-parent.Done():
+		err = parent.Err()
+	case err = <-errCh:
+		// 收到第一个错误，触发全局退出
+	}
+
+	cancel()  // 关键：让所有 goroutine 尽快退出
+	wg.Wait() // 等大家都收敛
+
+	return err
 }
 
 func (f *Fetcher) decideStartHeight(ctx context.Context) (int64, int64, error) {
@@ -391,7 +457,7 @@ func (f *Fetcher) decideStartHeight(ctx context.Context) (int64, int64, error) {
 		return 0, 0, err
 	}
 	// A) checkpoint wins, but must be validated against canonical: (height, hash)
-	if ck, ok, err := f.ckpt.Load(); err != nil {
+	if ck, ok, err := f.ckpt.load(); err != nil {
 		return 0, 0, err
 	} else if ok && ck.LastHeight > 0 {
 		if ck.LastHash == "" {

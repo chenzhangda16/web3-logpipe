@@ -45,8 +45,8 @@ export PG_DSN="postgres://${PG_DB_USER:-web3}:${PG_DB_PASS:-web3}@${PG_HOST:-127
 : "${FETCH_BACKFILL_SEC:=86400}"
 : "${FETCH_PAGE:=200}"
 : "${FETCH_POLL_HEAD:=2s}"
-: "${FETCH_IDLE_SLEEP:=300ms}"
 : "${FETCH_CKPT:=./data/fetcher.ckpt}"
+: "${CKPT_TICK:=1s}"
 : "${RPC_BASE:=http://$MOCK_RPC}"
 
 : "${PROC_GROUP:=logpipe-processor}"
@@ -507,7 +507,8 @@ start() {
         -page "$FETCH_PAGE" \
         -poll-head "$FETCH_POLL_HEAD" \
         -idle-sleep "$FETCH_IDLE_SLEEP" \
-        -ckpt "$FETCH_CKPT"
+        -ckpt-path "$FETCH_CKPT" \
+        -ckpt-tick "$CKPT_TICK"
     append_pid "$pid_fetch"
     log "fetcher pid=$pid_fetch log=$fetch_log latest=$LOG_DIR/fetcher.latest.log"
 

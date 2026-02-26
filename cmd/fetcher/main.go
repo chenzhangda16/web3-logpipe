@@ -30,10 +30,10 @@ func main() {
 		// Pagination and pacing
 		pageSize      = flag.Int("page", 200, "blocks per range request (keep small if block JSON is big)")
 		pollHeadEvery = flag.Duration("poll-head", 2*time.Second, "how often to refresh head")
-		idleSleep     = flag.Duration("idle-sleep", 300*time.Millisecond, "sleep when caught up")
 
 		// Checkpoint
-		ckptPath = flag.String("ckpt", "./data/fetcher.ckpt", "checkpoint file path")
+		ckptPath = flag.String("ckpt-path", "./data/fetcher.ckpt", "checkpoint file path")
+		ckptTick = flag.Duration("ckpt-tick", 1*time.Second, "block interval")
 	)
 	flag.Parse()
 
@@ -45,15 +45,15 @@ func main() {
 		RPCConcurrency: *rpcConc,
 		Brokers:        *brokers,
 		Topic:          *topic,
-		Partitions:     int32(*partitions),
+		Partitions:     *partitions,
 
 		BackfillSec: *backfillSec,
 		PageSize:    *pageSize,
 
 		PollHeadEvery: *pollHeadEvery,
-		IdleSleep:     *idleSleep,
 
 		CheckpointPath: *ckptPath,
+		CheckpointTick: *ckptTick,
 	}
 
 	f, err := fetcher.New(cfg)
