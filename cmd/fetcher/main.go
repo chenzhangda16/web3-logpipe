@@ -20,9 +20,9 @@ func main() {
 		rpcConc = flag.Int("rpc-concurrency", 4, "RPC worker concurrency (BlocksRange parallelism)")
 
 		// Kafka
-		brokers    = flag.String("brokers", "127.0.0.1:9092", "kafka brokers, comma-separated")
-		topic      = flag.String("topic", "mockchain.blocks", "kafka topic to produce blocks")
-		partitions = flag.Int("partitions", 4, "Kafka topic partitions used for explicit partitioning: partition=height%P")
+		brokers = flag.String("brokers", "127.0.0.1:9092", "kafka brokers, comma-separated")
+		topic   = flag.String("topic", "mockchain.blocks", "kafka topic to produce blocks")
+		//partitions = flag.Int("partitions", 4, "Kafka topic partitions used for explicit partitioning: partition=height%P")
 
 		// Backfill window (seconds). -1 disables cold start backfill; will start from checkpoint or head.
 		backfillSec = flag.Int64("backfill-sec", 86400, "cold start backfill window in seconds; -1 disables")
@@ -34,6 +34,7 @@ func main() {
 		// Checkpoint
 		ckptPath = flag.String("ckpt-path", "./data/fetcher.ckpt", "checkpoint file path")
 		ckptTick = flag.Duration("ckpt-tick", 1*time.Second, "block interval")
+		perfMode = flag.String("perf-mode", "prod", "perf mode: prod | bench")
 	)
 	flag.Parse()
 
@@ -45,7 +46,7 @@ func main() {
 		RPCConcurrency: *rpcConc,
 		Brokers:        *brokers,
 		Topic:          *topic,
-		Partitions:     *partitions,
+		//Partitions:     *partitions,
 
 		BackfillSec: *backfillSec,
 		PageSize:    *pageSize,
@@ -54,6 +55,7 @@ func main() {
 
 		CheckpointPath: *ckptPath,
 		CheckpointTick: *ckptTick,
+		PerfMode:       fetcher.PerfMode(*perfMode),
 	}
 
 	f, err := fetcher.New(cfg)

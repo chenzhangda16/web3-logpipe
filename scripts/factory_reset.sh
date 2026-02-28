@@ -136,15 +136,15 @@ main() {
 
   log "Re-bootstrap Kafka (ensure_kafka.sh)..."
 
-  : "${KAFKA_TOPIC:=mockchain.blocks}"
-  : "${OUT_TOPIC:=logpipe.out}"
-  : "${KAFKA_IN_PARTITIONS:=4}"
-  : "${KAFKA_OUT_PARTITIONS:=1}"
-
-  export IN_TOPIC="$KAFKA_TOPIC"
-  export OUT_TOPIC="$OUT_TOPIC"
-  export KAFKA_IN_PARTITIONS="$KAFKA_IN_PARTITIONS"
-  export KAFKA_OUT_PARTITIONS="$KAFKA_OUT_PARTITIONS"
+#  : "${KAFKA_TOPIC:=mockchain.blocks}"
+#  : "${OUT_TOPIC:=logpipe.out}"
+#  : "${KAFKA_IN_PARTITIONS:=1}"
+#  : "${KAFKA_OUT_PARTITIONS:=1}"
+#
+#  export IN_TOPIC="$KAFKA_TOPIC"
+#  export OUT_TOPIC="$OUT_TOPIC"
+#  export KAFKA_IN_PARTITIONS="$KAFKA_IN_PARTITIONS"
+#  export KAFKA_OUT_PARTITIONS="$KAFKA_OUT_PARTITIONS"
 
   "$ROOT_DIR/scripts/ensure_kafka.sh"
 

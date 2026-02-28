@@ -30,15 +30,20 @@ type Config struct {
 	CheckpointTick time.Duration
 
 	RPCConcurrency int // 上游 worker 数（P）
-	Partitions     int // Kafka 分区数（用于 height%P）
+	//Partitions     int // Kafka 分区数（用于 height%P）
+	PgRespBuf int
+	PgReqBuf  int
+	PerfMode  PerfMode
 }
 
 type Fetcher struct {
-	cfg Config
+	cfg   Config
+	bench *FetchBench
+	mode  string // "full" / "no_kafka" / "no_rpc"
 
-	p            perf
 	errCh        chan error
 	nextHeadPoll time.Time
+	pgNCh        chan int
 	pgReqCh      chan pageReq
 	pgOutCh      []chan struct{}
 	pgRespCh     chan pageResp
@@ -47,6 +52,13 @@ type Fetcher struct {
 	ckpt         Checkpoint
 	close        func() error
 }
+
+type PerfMode string
+
+const (
+	BigCache PerfMode = "bench" // 测试背压
+	Prod     PerfMode = "prod"  // 生产形态
+)
 
 type pageReq struct {
 	seq  int64
@@ -72,6 +84,12 @@ func New(cfg Config) (*Fetcher, error) {
 	if cfg.PollHeadEvery <= 0 {
 		cfg.PollHeadEvery = 2 * time.Second
 	}
+	if cfg.RPCConcurrency <= 0 {
+		cfg.RPCConcurrency = 1
+	}
+	if cfg.CheckpointTick <= 0 {
+		cfg.CheckpointTick = 1 * time.Second
+	}
 	if cfg.CheckpointPath == "" {
 		cfg.CheckpointPath = "./data/fetcher.ckpt"
 	}
@@ -88,14 +106,39 @@ func New(cfg Config) (*Fetcher, error) {
 		return nil, err
 	}
 
+	reqBuf := cfg.PgReqBuf
+	respBuf := cfg.PgRespBuf
+
+	// 兼容：如果没显式配置，就用 PerfMode 给默认档位
+	if reqBuf <= 0 || respBuf <= 0 {
+		switch cfg.PerfMode {
+		case "bench":
+			if reqBuf <= 0 {
+				reqBuf = 4096
+			}
+			if respBuf <= 0 {
+				respBuf = 1024
+			}
+		default: // "prod"/空
+			if reqBuf <= 0 {
+				reqBuf = cfg.RPCConcurrency * 4
+			}
+			if respBuf <= 0 {
+				respBuf = cfg.RPCConcurrency * 4
+			}
+		}
+	}
+
 	f := &Fetcher{
 		cfg:      cfg,
 		rpc:      rpc,
 		prod:     prod,
 		ckpt:     ckpt,
-		pgReqCh:  make(chan pageReq, cfg.RPCConcurrency*4),
-		pgRespCh: make(chan pageResp, cfg.RPCConcurrency*4),
+		pgNCh:    make(chan int, 64),
+		pgReqCh:  make(chan pageReq, reqBuf),
+		pgRespCh: make(chan pageResp, respBuf),
 	}
+
 	for i := 0; i < cfg.RPCConcurrency; i++ {
 		f.pgOutCh = append(f.pgOutCh, make(chan struct{}, 1))
 	}
@@ -108,96 +151,6 @@ func New(cfg Config) (*Fetcher, error) {
 }
 
 func (f *Fetcher) Close() error { return f.close() }
-
-type perf struct {
-	loops  int64
-	pages  int64
-	blocks int64
-	retryN int64
-
-	// "wait"
-	sleepTotal time.Duration
-	maxSleep   time.Duration
-
-	// "work"
-	workTotal time.Duration
-	maxWork   time.Duration
-
-	// breakdown
-	rpcTotal  time.Duration
-	maxRPC    time.Duration
-	headTotal time.Duration
-	maxHead   time.Duration
-	headCalls int64
-
-	prodTotal time.Duration
-	maxProd   time.Duration
-
-	ckptTotal time.Duration
-	maxCkpt   time.Duration
-
-	sampleStart time.Time
-}
-
-func (p *perf) sleep(d time.Duration) {
-	if d <= 0 {
-		return
-	}
-	time.Sleep(d)
-	p.sleepTotal += d
-	if d > p.maxSleep {
-		p.maxSleep = d
-	}
-}
-
-func (p *perf) avg(d time.Duration, n int64) time.Duration {
-	if n <= 0 {
-		return 0
-	}
-	return time.Duration(int64(d) / n)
-}
-
-func (p *perf) flush(now time.Time) {
-	elapsed := now.Sub(p.sampleStart)
-	if elapsed <= 0 {
-		return
-	}
-
-	total := p.sleepTotal + p.workTotal
-	busyPct := 0.0
-	if total > 0 {
-		busyPct = float64(p.workTotal) / float64(total) * 100.0
-	}
-
-	pps := 0.0
-	bps := 0.0
-	if elapsed.Seconds() > 0 {
-		pps = float64(p.pages) / elapsed.Seconds()
-		bps = float64(p.blocks) / elapsed.Seconds()
-	}
-
-	log.Printf(
-		"[fetcher][perf] loops=%d pages=%d blocks=%d retries=%d busy=%.1f%% pps=%.1f bps=%.1f "+
-			"avg_sleep=%s avg_work=%s "+
-			"avg_range=%s avg_prod=%s avg_ckpt=%s "+
-			"avg_head=%s head_calls=%d "+
-			"max_sleep=%s max_work=%s max_range=%s max_prod=%s max_ckpt=%s max_head=%s "+
-			"elapsed=%s",
-		p.loops, p.pages, p.blocks, p.retryN, busyPct, pps, bps,
-		p.avg(p.sleepTotal, p.loops),
-		p.avg(p.workTotal, p.loops),
-		p.avg(p.rpcTotal-p.headTotal, p.pages),
-		p.avg(p.prodTotal, p.blocks),
-		p.avg(p.ckptTotal, p.blocks),
-		p.avg(p.headTotal, p.headCalls), p.headCalls,
-		p.maxSleep, p.maxWork, p.maxRPC, p.maxProd, p.maxCkpt, p.maxHead,
-		elapsed,
-	)
-
-	*p = perf{
-		sampleStart: now,
-	}
-}
 
 func (f *Fetcher) pollHead(ctx context.Context) <-chan int64 {
 	ch := make(chan int64, 1)
@@ -262,7 +215,14 @@ func (f *Fetcher) schedule(ctx context.Context, next, chainHead int64) error {
 		}
 
 		to := min(next+int64(f.cfg.PageSize)-1, chainHead)
+		n := int(to - next + 1)
 
+		// 注意：这里也要 ctx-aware，避免 cancel 卡住
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case f.pgNCh <- n:
+		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -276,91 +236,127 @@ func (f *Fetcher) schedule(ctx context.Context, next, chainHead int64) error {
 
 func (f *Fetcher) getPage(ctx context.Context) error {
 	P := int64(f.cfg.RPCConcurrency)
-	var tSum time.Duration
 
-	for pgReq := range f.pgReqCh {
-		seq := pgReq.seq
-		next := pgReq.from
-		to := pgReq.to
-		lane := seq % P
-		nextLane := (seq + 1) % P
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case pgReq, ok := <-f.pgReqCh:
+			if !ok {
+				return nil
+			}
+			seq := pgReq.seq
+			next := pgReq.from
+			to := pgReq.to
+			lane := seq % P
+			nextLane := (seq + 1) % P
 
-		pgResp := pageResp{seq: seq}
+			pgResp := pageResp{seq: seq}
 
-		err := retry.Do(ctx, retry.Policy{
-			MaxAttempts: 5,
-			BaseDelay:   100 * time.Millisecond,
-			MaxDelay:    5 * time.Second,
-			Jitter:      100 * time.Millisecond,
-			Classify: func(err error) retry.Class {
-				if errors.Is(err, ErrRangeUnacceptable) {
+			err := retry.Do(ctx, retry.Policy{
+				MaxAttempts: 5,
+				BaseDelay:   100 * time.Millisecond,
+				MaxDelay:    5 * time.Second,
+				Jitter:      100 * time.Millisecond,
+				Classify: func(err error) retry.Class {
+					if errors.Is(err, ErrRangeUnacceptable) {
+						return retry.Retryable
+					}
+					// TODO: 你未来可以把某些错误判为 Fatal
 					return retry.Retryable
+				},
+				OnRetry: func(attempt int, wait time.Duration, err error) {
+					//f.p.retryN++
+					log.Printf("[fetcher] range retry: attempt=%d wait=%s err=%v", attempt, wait, err)
+				},
+			}, func(ctx context.Context) error {
+				var err error
+				t0 := time.Now()
+				pgResp.resp, err = f.rpc.BlocksRange(ctx, next, to)
+				dur := time.Since(t0)
+				if f.bench != nil {
+					blocksN := 0
+					if err == nil {
+						blocksN = len(pgResp.resp.Blocks)
+					}
+					f.bench.ObserveRPC(dur, err, blocksN)
 				}
-				// TODO: 你未来可以把某些错误判为 Fatal
-				return retry.Retryable
-			},
-			OnRetry: func(attempt int, wait time.Duration, err error) {
-				f.p.retryN++
-				log.Printf("[fetcher] range retry: attempt=%d wait=%s err=%v", attempt, wait, err)
-			},
-		}, func(ctx context.Context) error {
-			var err error
-			t0 := time.Now()
-			pgResp.resp, err = f.rpc.BlocksRange(ctx, next, to)
-			tSum += time.Since(t0)
+				if err != nil {
+					return err
+				}
+				if len(pgResp.resp.Blocks) == 0 && !pgResp.resp.Partial {
+					return ErrRangeUnacceptable
+				}
+				return nil
+			})
+
 			if err != nil {
 				return err
 			}
-			if len(pgResp.resp.Blocks) == 0 && !pgResp.resp.Partial {
-				return ErrRangeUnacceptable
+
+			// 只有成功拿到 resp 才进入 lane/token 流程
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-f.pgOutCh[lane]:
 			}
-			return nil
-		})
 
-		if err != nil {
-			return err
-		}
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case f.pgRespCh <- pgResp:
+			}
 
-		// 只有成功拿到 resp 才进入 lane/token 流程
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-f.pgOutCh[lane]:
-		}
-
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case f.pgRespCh <- pgResp:
-		}
-
-		// token 传递也要尊重 ctx，避免 cancel 时卡死
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case f.pgOutCh[nextLane] <- struct{}{}:
+			// token 传递也要尊重 ctx，避免 cancel 时卡死
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case f.pgOutCh[nextLane] <- struct{}{}:
+			}
 		}
 	}
-	return nil
 }
 
 func (f *Fetcher) produceLoop(ctx context.Context) error {
-	for pgResp := range f.pgRespCh {
-		seq := pgResp.seq
-		for _, b := range pgResp.resp.Blocks {
-			if err := f.prod.ProduceBlockSinglePartition(ctx, b, seq); err != nil {
-				log.Printf("[fetcher] enqueue err: page=%d height=%d err=%v",
-					seq, b.Header.Number, err)
-				return err
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case pgResp, ok := <-f.pgRespCh:
+			if !ok {
+				return nil
+			}
+			seq := pgResp.seq
+			for _, b := range pgResp.resp.Blocks {
+				if err := f.prod.ProduceBlockSinglePartition(ctx, b, seq); err != nil {
+					log.Printf("[fetcher] enqueue err: page=%d height=%d err=%v",
+						seq, b.Header.Number, err)
+					return err
+				}
+			}
+			if f.bench != nil {
+				f.bench.AddEnqBlocks(len(pgResp.resp.Blocks))
 			}
 		}
 	}
-	return nil
 }
 
 func (f *Fetcher) Run(parent context.Context) error {
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
+	f.bench = NewFetchBench("coldstart24h", 1*time.Second)
+	f.bench.SetQueueSampler(func() QueueSnapshot {
+		return QueueSnapshot{
+			PgReqLen:  len(f.pgReqCh),
+			PgReqCap:  cap(f.pgReqCh),
+			PgRespLen: len(f.pgRespCh),
+			PgRespCap: cap(f.pgRespCh),
+		}
+	})
+	f.prod.SetInputBlockObserver(500*time.Microsecond, f.bench.AddInputBlocked)
+	defer f.bench.Stop()
+	log.Printf("[fetcher] perf mode=%s", f.mode)
+
 	errCh := make(chan error, 1)
 	var wg sync.WaitGroup
 
@@ -373,8 +369,6 @@ func (f *Fetcher) Run(parent context.Context) error {
 
 	log.Printf("[fetcher] start: next_height=%d topic=%s rpc=%s brokers=%s",
 		startH, f.cfg.Topic, f.cfg.RPCBaseURL, f.cfg.Brokers)
-
-	f.p.sampleStart = time.Now()
 
 	wg.Add(1)
 	go func() {
@@ -416,7 +410,7 @@ func (f *Fetcher) Run(parent context.Context) error {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		if err := ckptLoopPeriodic(ctx, ckptCh, f.ckpt, f.cfg.CheckpointTick); err != nil {
+		if err := ckptLoopPeriodic(ctx, ckptCh, f.ckpt, f.cfg.CheckpointTick, f.bench); err != nil {
 			select {
 			case errCh <- err:
 			default:

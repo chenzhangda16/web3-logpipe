@@ -95,7 +95,7 @@ func pushLatestCkpt(ch chan Ckpt, v Ckpt) {
 	}
 }
 
-func ckptLoopPeriodic(ctx context.Context, ch <-chan Ckpt, ck Checkpoint, every time.Duration) error {
+func ckptLoopPeriodic(ctx context.Context, ch <-chan Ckpt, ck Checkpoint, every time.Duration, bench *FetchBench) error {
 	var pending *Ckpt
 	tk := time.NewTicker(every)
 	defer tk.Stop()
@@ -120,6 +120,9 @@ func ckptLoopPeriodic(ctx context.Context, ch <-chan Ckpt, ck Checkpoint, every 
 		case <-tk.C:
 			if err := flush(); err != nil {
 				return err
+			}
+			if bench != nil {
+				bench.AddCkptSave()
 			}
 		}
 	}

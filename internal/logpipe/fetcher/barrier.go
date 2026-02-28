@@ -37,21 +37,40 @@ func (f *Fetcher) barrierLoop(
 
 	var minOpen int64 = -1
 	var maxSeen int64 = -1
+	var expQ []int
 
+	// 非阻塞从 f.pgNCh 拉一些 expectedN 进 expQ
+	drainExpected := func() {
+		for {
+			select {
+			case n := <-f.pgNCh:
+				expQ = append(expQ, n)
+			default:
+				return
+			}
+		}
+	}
+
+	// 现在 advance() 需要知道 minOpen 对应的 expectedN：它在 expQ[0]
 	advance := func() {
 		for minOpen >= 0 {
+			drainExpected()
+			if len(expQ) == 0 {
+				// 没有 expectedN，先别推进（但绝不阻塞）
+				return
+			}
+			need := expQ[0] // minOpen 对应的 expectedN
+
 			st, ok := stats[minOpen]
-			if ok && st.n >= cfg.PageSize {
-				// page minOpen 完成：推 ckpt（覆盖式，不阻塞）
-				pushLatestCkpt(ckptCh, Ckpt{
-					LastHeight: st.maxH,
-					LastHash:   st.maxHash,
-				})
+			if ok && st.n >= need {
+				// page 完成：推 ckpt
+				pushLatestCkpt(ckptCh, Ckpt{LastHeight: st.maxH, LastHash: st.maxHash})
 				delete(stats, minOpen)
 				minOpen++
+				expQ = expQ[1:] // 消耗一个 expectedN
 				continue
 			}
-			break
+			return
 		}
 	}
 
@@ -74,6 +93,9 @@ func (f *Fetcher) barrierLoop(
 					log.Printf("[fetcher] producer error: err=%v", pe.Err)
 				}
 			}
+			if f.bench != nil {
+				f.bench.AddProdErr()
+			}
 			return pe.Err
 
 		case msg, ok := <-succ:
@@ -83,6 +105,10 @@ func (f *Fetcher) barrierLoop(
 			meta, ok := msg.Metadata.(ProduceMeta)
 			if !ok {
 				return errors.New("producer success meta missing")
+			}
+
+			if f.bench != nil {
+				f.bench.AddAckBlocks(1)
 			}
 
 			ps := meta.PageSeq
@@ -109,12 +135,30 @@ func (f *Fetcher) barrierLoop(
 			// fatal：落后超过 AllowedLagPages 页
 			if minOpen >= 0 && (maxSeen-minOpen) > cfg.AllowedLagPages {
 				old := stats[minOpen]
-				have := 0
+				have0 := 0
 				if old != nil {
-					have = old.n
+					have0 = old.n
 				}
-				return fmt.Errorf("FATAL lag: minOpen=%d have=%d/%d maxSeen=%d lag=%d",
-					minOpen, have, cfg.PageSize, maxSeen, maxSeen-minOpen)
+				expected := -1
+				expectedKnown := false
+				if minOpen >= 0 && len(expQ) > 0 {
+					expected = expQ[0]
+					expectedKnown = true
+				}
+
+				have1 := 0
+				if st := stats[minOpen+1]; st != nil {
+					have1 = st.n
+				}
+
+				if f.bench != nil {
+					f.bench.AddLagFatal()
+				}
+
+				return fmt.Errorf(
+					"FATAL lag: minOpen=%d have0=%d expected0=%d known0=%t | next=%d have1=%d | maxSeen=%d lag=%d",
+					minOpen, have0, expected, expectedKnown, minOpen+1, have1, maxSeen, maxSeen-minOpen,
+				)
 			}
 		}
 	}

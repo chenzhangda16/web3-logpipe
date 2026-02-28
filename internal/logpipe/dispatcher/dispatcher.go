@@ -41,6 +41,9 @@ func (d *Dispatcher) Append(ev event.TxEvent, idx int64) {
 
 func (d *Dispatcher) WinMove(txTail []int64, txHead int64, openWin bool, offset int64) {
 	for i := range d.winMoveRecord {
+		if txTail[i] == -1 {
+			continue
+		}
 		d.winMoveRecord[i] <- TxWinMarginInfo{
 			TxHead:  txHead,
 			TxTail:  txTail[i],

@@ -40,23 +40,25 @@ export PG_DSN="postgres://${PG_DB_USER:-web3}:${PG_DB_PASS:-web3}@${PG_HOST:-127
 
 : "${KAFKA_BROKERS:=127.0.0.1:9092}"
 : "${KAFKA_TOPIC:=mockchain.blocks}"
-: "${KAFKA_IN_PARTITIONS:=4}"
+#: "${KAFKA_IN_PARTITIONS:=4}"
 
 : "${FETCH_BACKFILL_SEC:=86400}"
 : "${FETCH_PAGE:=200}"
 : "${FETCH_POLL_HEAD:=2s}"
 : "${FETCH_CKPT:=./data/fetcher.ckpt}"
 : "${CKPT_TICK:=1s}"
+: "${PERF_MODE:=bench}"
 : "${RPC_BASE:=http://$MOCK_RPC}"
+: "${RPC_CONCURRENCY:=8}"
 
 : "${PROC_GROUP:=logpipe-processor}"
 : "${PROC_SPOOL:=./data/spool.wal}"
-: "${PROC_DECODE_WORKER:=4}"
+: "${PROC_DECODE_WORKER:=8}"
 : "${PROC_DECODE_QUEUE:=8192}"
 : "${PROC_CKPT:=./data/processor.ckpt}"
 
 : "${OUT_TOPIC:=logpipe.out}"
-: "${KAFKA_OUT_PARTITIONS:=1}"
+#: "${KAFKA_OUT_PARTITIONS:=1}"
 : "${WRITER_GROUP:=logpipe.writer}"
 
 : "${NO_BUILD:=false}"
@@ -407,10 +409,10 @@ start() {
 
   source ./scripts/ensure_pg.sh
 
-  export IN_TOPIC="$KAFKA_TOPIC"
-  export OUT_TOPIC="$OUT_TOPIC"
-  export KAFKA_IN_PARTITIONS="$KAFKA_IN_PARTITIONS"
-  export KAFKA_OUT_PARTITIONS="$KAFKA_OUT_PARTITIONS"
+#  export IN_TOPIC="$KAFKA_TOPIC"
+#  export OUT_TOPIC="$OUT_TOPIC"
+#  export KAFKA_IN_PARTITIONS="$KAFKA_IN_PARTITIONS"
+#  export KAFKA_OUT_PARTITIONS="$KAFKA_OUT_PARTITIONS"
   source ./scripts/ensure_kafka.sh
 
   need_cmd curl
@@ -501,14 +503,15 @@ start() {
     start_with_dual_logs pid_fetch fetcher "$fetch_log" -- \
       ./bin/fetcher \
         -rpc "$RPC_BASE" \
+        -rpc-concurrency "$RPC_CONCURRENCY" \
         -brokers "$KAFKA_BROKERS" \
         -topic "$KAFKA_TOPIC" \
         -backfill-sec "$FETCH_BACKFILL_SEC" \
         -page "$FETCH_PAGE" \
         -poll-head "$FETCH_POLL_HEAD" \
-        -idle-sleep "$FETCH_IDLE_SLEEP" \
         -ckpt-path "$FETCH_CKPT" \
-        -ckpt-tick "$CKPT_TICK"
+        -ckpt-tick "$CKPT_TICK" \
+        -perf-mode "$PERF_MODE"
     append_pid "$pid_fetch"
     log "fetcher pid=$pid_fetch log=$fetch_log latest=$LOG_DIR/fetcher.latest.log"
 

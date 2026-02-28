@@ -44,24 +44,6 @@ func NewRunner(winIdx int, disp *dispatcher.Dispatcher, sink out.Sink, allOpen *
 	}
 }
 
-//func (r *Runner) Run(ctx context.Context) error {
-//	ch := r.disp.WinMoveCh(r.winIdx)
-//
-//	for {
-//		select {
-//		case <-ctx.Done():
-//			return ctx.Err()
-//		case mv, ok := <-ch:
-//			if !ok {
-//				return nil
-//			}
-//			if err := r.handleMove(ctx, mv); err != nil {
-//				return err
-//			}
-//		}
-//	}
-//}
-
 func (r *Runner) Run(ctx context.Context) error {
 	ch := r.disp.WinMoveCh(r.winIdx)
 
@@ -142,6 +124,18 @@ func (r *Runner) Run(ctx context.Context) error {
 			flush(time.Now())
 			return nil
 		}
+
+		drained := 0
+		for {
+			select {
+			case mv2 := <-ch:
+				mv = mv2
+				drained++
+			default:
+				goto HANDLE
+			}
+		}
+	HANDLE:
 
 		// ---- measure work ----
 		tWork0 := time.Now()

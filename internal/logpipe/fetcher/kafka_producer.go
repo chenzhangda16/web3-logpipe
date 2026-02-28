@@ -15,8 +15,10 @@ import (
 // internal/logpipe/fetcher/kafka_producer.go  (single partition async)
 
 type Producer struct {
-	topic string
-	ap    sarama.AsyncProducer
+	topic          string
+	ap             sarama.AsyncProducer
+	onInputBlocked func(d time.Duration)
+	blockThreshold time.Duration
 }
 
 type ProduceMeta struct {
@@ -41,7 +43,7 @@ func NewProducer(brokersCSV, topic string) (*Producer, error) {
 	cfg.Net.MaxOpenRequests = 1
 
 	// batching
-	cfg.Producer.Flush.Messages = 500
+	cfg.Producer.Flush.Messages = 1000
 	cfg.Producer.Flush.Frequency = 10 * time.Millisecond
 
 	cfg.Producer.Compression = sarama.CompressionLZ4
@@ -52,7 +54,9 @@ func NewProducer(brokersCSV, topic string) (*Producer, error) {
 		return nil, err
 	}
 
-	return &Producer{topic: topic, ap: ap}, nil
+	p := &Producer{topic: topic, ap: ap}
+	p.blockThreshold = 500 * time.Microsecond // 你也可以 1ms
+	return p, nil
 }
 
 func (p *Producer) Close() error {
@@ -65,12 +69,16 @@ func (p *Producer) Close() error {
 func (p *Producer) Successes() <-chan *sarama.ProducerMessage { return p.ap.Successes() }
 func (p *Producer) Errors() <-chan *sarama.ProducerError      { return p.ap.Errors() }
 
+func (p *Producer) SetInputBlockObserver(th time.Duration, fn func(time.Duration)) {
+	if p == nil {
+		return
+	}
+	p.blockThreshold = th
+	p.onInputBlocked = fn
+}
+
 // ProduceBlockSinglePartition: 固定打到 partition 0（全局顺序最简单）
-func (p *Producer) ProduceBlockSinglePartition(
-	ctx context.Context,
-	b model.Block,
-	pageSeq int64,
-) error {
+func (p *Producer) ProduceBlockSinglePartition(ctx context.Context, b model.Block, pageSeq int64) error {
 	payload, err := json.Marshal(b)
 	if err != nil {
 		return err
@@ -80,18 +88,32 @@ func (p *Producer) ProduceBlockSinglePartition(
 
 	msg := &sarama.ProducerMessage{
 		Topic:     p.topic,
-		Partition: 0, // <- 单 partition
+		Partition: 0,
 		Key:       sarama.StringEncoder(strconv.FormatInt(h, 10)),
 		Value:     sarama.ByteEncoder(payload),
 		Timestamp: ts,
 		Metadata:  ProduceMeta{PageSeq: pageSeq, Height: h, Hash: b.Hash},
 	}
 
-	// ctx-aware enqueue（关键：send 放进 select）
+	// fast-path: non-blocking attempt
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
 	case p.ap.Input() <- msg:
+		return nil
+	default:
+	}
+
+	// slow-path: measure blocking time
+	t0 := time.Now()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case p.ap.Input() <- msg:
+		d := time.Since(t0)
+		if p.onInputBlocked != nil && d >= p.blockThreshold {
+			p.onInputBlocked(d)
+		}
 		return nil
 	}
 }
