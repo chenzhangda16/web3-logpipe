@@ -1,12 +1,14 @@
 package ingest
 
 import (
+	"context"
 	"encoding/json"
 	"log"
 	"sync"
 	"time"
 
 	"github.com/IBM/sarama"
+	"github.com/chenzhangda16/web3-logpipe/internal/logpipe/bench"
 
 	"github.com/chenzhangda16/web3-logpipe/internal/logpipe/dispatcher"
 	"github.com/chenzhangda16/web3-logpipe/internal/logpipe/event"
@@ -42,6 +44,7 @@ type Ingestor struct {
 	winTs                []int64
 	delayWinMoveBlockTs  []int64
 	delayWinMoveBlockIdx []int64
+	openWin              bool
 
 	validCount   int
 	rbInCh       [MaxGroutines]chan struct{}
@@ -53,10 +56,13 @@ type Ingestor struct {
 	// --- offsets / cold-start observability ---
 	setupAt int64 // set in Setup()
 
-	client sarama.Client
-	topic  string
+	client  sarama.Client
+	topic   string
+	sessCtx context.Context
 
-	adapter *MockChainAdapter
+	adapter      *MockChainAdapter
+	procBench    *bench.ProcBench
+	readyBenchCh chan struct{}
 }
 
 func NewIngestor(
@@ -68,6 +74,7 @@ func NewIngestor(
 	adapter *MockChainAdapter,
 	client sarama.Client,
 	topic string,
+	procBench *bench.ProcBench,
 ) *Ingestor {
 	if workerN <= 0 {
 		workerN = MaxGroutines
@@ -102,6 +109,8 @@ func NewIngestor(
 	ig.rbOutCh[0] <- struct{}{}
 
 	ig.rbBlockInfo = new([dispatcher.MaxBlocksPerWindow]BlockWinMarginInfo)
+	ig.procBench = procBench
+	ig.readyBenchCh = make(chan struct{})
 
 	ig.wg.Add(workerN)
 	for i := 0; i < workerN; i++ {
@@ -113,6 +122,12 @@ func NewIngestor(
 	return ig
 }
 
+func (ig *Ingestor) RawChSnapshot() (ln, cp int) { return len(ig.rawCh), cap(ig.rawCh) }
+
+func (ig *Ingestor) ReadyBenchCh() <-chan struct{} {
+	return ig.readyBenchCh
+}
+
 func (ig *Ingestor) Close() error {
 	close(ig.rawCh)
 	ig.wg.Wait()
@@ -122,7 +137,15 @@ func (ig *Ingestor) Close() error {
 // ConsumeClaim：只做 barrier + commit + 投递，不做任何窗口/图计算
 func (ig *Ingestor) ConsumeClaim(sess sarama.ConsumerGroupSession, claim sarama.ConsumerGroupClaim) error {
 	for msg := range claim.Messages() {
-		if err := ig.spool.Append(msg.Partition, msg.Offset, msg.Value); err != nil {
+		if ig.procBench != nil {
+			ig.procBench.AddConsumeMsg(1)
+		}
+		t0 := time.Now()
+		err := ig.spool.Append(msg.Partition, msg.Offset, msg.Value)
+		if ig.procBench != nil {
+			ig.procBench.ObserveSpool(time.Since(t0), err)
+		}
+		if err != nil {
 			log.Printf("[ingest] spool append failed: p=%d off=%d err=%v", msg.Partition, msg.Offset, err)
 			continue
 		}
@@ -131,20 +154,49 @@ func (ig *Ingestor) ConsumeClaim(sess sarama.ConsumerGroupSession, claim sarama.
 
 		val := getMsgBuf(len(msg.Value))
 		copy(val, msg.Value)
-
+		tSend := time.Now()
 		ig.rawCh <- RawMsg{
 			Partition: msg.Partition,
 			Offset:    msg.Offset,
 			Value:     val,
 		}
+		if ig.procBench != nil {
+			d := time.Since(tSend)
+			if d > 0 { // 只要你想都记，就直接 Add；如果你只想记录“明显阻塞”，可以加阈值比如 >200µs
+				ig.procBench.AddRawSendBlocked(d)
+			}
+		}
 	}
 	return nil
+}
+
+func recvPermit(ctx context.Context, ch <-chan struct{}) bool {
+	select {
+	case <-ctx.Done():
+		return false
+	case <-ch:
+		return true
+	}
+}
+
+func sendPermit(ctx context.Context, ch chan<- struct{}) bool {
+	select {
+	case <-ctx.Done():
+		return false
+	case ch <- struct{}{}:
+		return true
+	}
 }
 
 func (ig *Ingestor) decodeLoop() {
 	for rawMsg := range ig.rawCh {
 		var blk mc.Block
-		if err := json.Unmarshal(rawMsg.Value, &blk); err != nil {
+		tDec := time.Now()
+		err := json.Unmarshal(rawMsg.Value, &blk)
+		if ig.procBench != nil {
+			ig.procBench.ObserveDecode(time.Since(tDec), err)
+		}
+		if err != nil {
 			log.Printf("[ingest] decode block failed: p=%d off=%d err=%v", rawMsg.Partition, rawMsg.Offset, err)
 			putMsgBuf(rawMsg.Value)
 			continue
@@ -157,7 +209,9 @@ func (ig *Ingestor) decodeLoop() {
 
 		reIdx := reOffset % dispatcher.MaxBlocksPerWindow
 
-		<-ig.rbInCh[reOffset%MaxGroutines]
+		if !recvPermit(ig.sessCtx, ig.rbInCh[reOffset%MaxGroutines]) {
+			return
+		}
 
 		curRbTxSum := ig.rbTxSum
 		ig.rbTxSum += int64(len(blk.Txs))
@@ -167,15 +221,23 @@ func (ig *Ingestor) decodeLoop() {
 			relativeIdx: curRbTxSum,
 		}
 
-		openWin := false
 		for idx, tail := range ig.blockTail {
 			for blk.Header.Timestamp-ig.rbBlockInfo[tail%dispatcher.MaxBlocksPerWindow].blockTs > ig.winTs[idx] {
 				tail++
 			}
 			ig.blockTail[idx] = tail
-			if idx == len(ig.blockTail)-1 {
-				openWin = tail != 0
+		}
+		maxIdx := len(ig.blockTail) - 1
+		if !ig.openWin && ig.blockTail[maxIdx] != 0 {
+			ig.openWin = true
+			if ig.procBench != nil {
+				ig.procBench.MarkSteady()
 			}
+			log.Printf("[procbench] switch steady: re_off=%d blk=%d ts=%d", reOffset, blk.Header.Number, blk.Header.Timestamp)
+		}
+
+		if ig.procBench != nil {
+			ig.procBench.SetLastProgress(reOffset, blk.Header.Number)
 		}
 
 		lane := reOffset % MaxGroutines
@@ -199,7 +261,9 @@ func (ig *Ingestor) decodeLoop() {
 			)
 		}
 
-		ig.rbInCh[(reOffset+1)%MaxGroutines] <- struct{}{}
+		if !sendPermit(ig.sessCtx, ig.rbInCh[(reOffset+1)%MaxGroutines]) {
+			return
+		}
 
 		parts := 1
 		//if len(ig.rawCh) == 0 {
@@ -210,16 +274,15 @@ func (ig *Ingestor) decodeLoop() {
 			ig.disp.Append(ev, idx)
 		}, parts)
 
-		<-ig.rbOutCh[reOffset%MaxGroutines]
-
-		if reOffset%1000 == 0 {
-			log.Printf("[ingest] p=%d off=%d re=%d blk=%d tx=%d rawCh=%d",
-				rawMsg.Partition, rawMsg.Offset, reOffset, blk.Header.Number, len(blk.Txs), len(ig.rawCh))
+		if !recvPermit(ig.sessCtx, ig.rbOutCh[reOffset%MaxGroutines]) {
+			return
 		}
 
-		ig.disp.WinMove(curTxTail, curTxHead, openWin, reOffset)
+		ig.disp.WinMove(curTxTail, curTxHead, ig.openWin)
 
-		ig.rbOutCh[(reOffset+1)%MaxGroutines] <- struct{}{}
+		if !sendPermit(ig.sessCtx, ig.rbOutCh[(reOffset+1)%MaxGroutines]) {
+			return
+		}
 	}
 }
 
@@ -228,6 +291,7 @@ var _ sarama.ConsumerGroupHandler = (*Ingestor)(nil)
 
 func (ig *Ingestor) Setup(sess sarama.ConsumerGroupSession) error {
 	ig.setupAt = time.Now().Unix()
+	ig.sessCtx = sess.Context()
 	for i := range ig.winTs {
 		ig.delayWinMoveBlockTs[i] = ig.setupAt - ig.winTs[i]
 		ig.delayWinMoveBlockIdx[i] = -1
@@ -266,8 +330,11 @@ func (ig *Ingestor) Setup(sess sarama.ConsumerGroupSession) error {
 	ig.readyOnce.Do(func() {
 		log.Printf("[ready] processor session established, signaling fifo=%s", ig.readyFifo)
 		go ready.SignalFifoCtx(sess.Context(), ig.readyFifo, "READY\n", 8*time.Second)
+		if ig.procBench != nil {
+			ig.procBench.Start()
+		}
+		close(ig.readyBenchCh)
 	})
-
 	return nil
 }
 

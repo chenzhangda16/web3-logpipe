@@ -1,9 +1,7 @@
-package fetcher
+package bench
 
 import (
 	"log"
-	"math"
-	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -38,13 +36,6 @@ type FetchBench struct {
 	samples []int64 // rpc latency ns, per-window
 	stopCh  chan struct{}
 	sampler atomic.Value // stores QueueSampler
-}
-
-type QueueSnapshot struct {
-	PgReqLen  int
-	PgReqCap  int
-	PgRespLen int
-	PgRespCap int
 }
 
 type QueueSampler func() QueueSnapshot
@@ -161,7 +152,6 @@ func (b *FetchBench) printTick() {
 	lf := atomic.SwapInt64(&b.lagFatal, 0)
 	ck := atomic.SwapInt64(&b.ckptSave, 0)
 
-	inp := atomic.SwapInt64(&b.inputBlockNS, 0)
 	inpNS := atomic.SwapInt64(&b.inputBlockNS, 0)
 	inpEv := atomic.SwapInt64(&b.inputBlockEv, 0)
 	inpMx := atomic.SwapInt64(&b.inputBlockMaxNS, 0)
@@ -197,38 +187,8 @@ func (b *FetchBench) printTick() {
 		"req=%d/%d resp=%d/%d input_block_ev=%d input_block_sum=%s input_block_avg=%s input_block_max=%s",
 		b.tag,
 		rpcPPS, rpcBPS, ok, er, avg, p50, p90, p99, time.Duration(mx),
-		enqBPS, ackBPS, pe, lf, ck, time.Duration(inp), b.reportEvery,
+		enqBPS, ackBPS, pe, lf, ck, time.Duration(inpNS), b.reportEvery,
 		snap.PgReqLen, snap.PgReqCap, snap.PgRespLen, snap.PgRespCap,
 		inpEv, time.Duration(inpNS), inpAvg, time.Duration(inpMx),
 	)
-}
-
-func percentiles(ns []int64) (p50, p90, p99 time.Duration) {
-	if len(ns) == 0 {
-		return 0, 0, 0
-	}
-	sort.Slice(ns, func(i, j int) bool { return ns[i] < ns[j] })
-	p50 = time.Duration(ns[idx(ns, 0.50)])
-	p90 = time.Duration(ns[idx(ns, 0.90)])
-	p99 = time.Duration(ns[idx(ns, 0.99)])
-	return
-}
-func idx(ns []int64, q float64) int {
-	if len(ns) == 0 {
-		return 0
-	}
-	if q <= 0 {
-		return 0
-	}
-	if q >= 1 {
-		return len(ns) - 1
-	}
-	x := int(math.Ceil(float64(len(ns))*q)) - 1
-	if x < 0 {
-		x = 0
-	}
-	if x >= len(ns) {
-		x = len(ns) - 1
-	}
-	return x
 }

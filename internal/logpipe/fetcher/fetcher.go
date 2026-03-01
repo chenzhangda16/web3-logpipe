@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/chenzhangda16/web3-logpipe/internal/logpipe/bench"
 	"github.com/chenzhangda16/web3-logpipe/internal/logpipe/retry"
 )
 
@@ -38,7 +39,7 @@ type Config struct {
 
 type Fetcher struct {
 	cfg   Config
-	bench *FetchBench
+	bench *bench.FetchBench
 	mode  string // "full" / "no_kafka" / "no_rpc"
 
 	errCh        chan error
@@ -344,9 +345,9 @@ func (f *Fetcher) produceLoop(ctx context.Context) error {
 func (f *Fetcher) Run(parent context.Context) error {
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
-	f.bench = NewFetchBench("coldstart24h", 1*time.Second)
-	f.bench.SetQueueSampler(func() QueueSnapshot {
-		return QueueSnapshot{
+	f.bench = bench.NewFetchBench("coldstart24h", 1*time.Second)
+	f.bench.SetQueueSampler(func() bench.QueueSnapshot {
+		return bench.QueueSnapshot{
 			PgReqLen:  len(f.pgReqCh),
 			PgReqCap:  cap(f.pgReqCh),
 			PgRespLen: len(f.pgRespCh),

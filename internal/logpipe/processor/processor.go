@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/IBM/sarama"
+	"github.com/chenzhangda16/web3-logpipe/internal/logpipe/bench"
 	"github.com/chenzhangda16/web3-logpipe/internal/logpipe/out"
 	"github.com/chenzhangda16/web3-logpipe/internal/logpipe/window"
 
@@ -32,21 +33,26 @@ type Config struct {
 type Processor struct {
 	cfg Config
 
-	cons     *Consumer
-	client   sarama.Client
-	spool    ingest.Spool
-	disp     *dispatcher.Dispatcher
-	ingestor *ingest.Ingestor
-	wins     []*window.Runner
+	cons      *Consumer
+	client    sarama.Client
+	spool     ingest.Spool
+	disp      *dispatcher.Dispatcher
+	ingestor  *ingest.Ingestor
+	wins      []*window.Runner
+	procBench *bench.ProcBench
 }
 
 func New(cfg Config) (*Processor, error) {
+	procBench := bench.NewProcBench("processor", 1*time.Second)
 	sp, err := ingest.NewFileSpool(cfg.SpoolPath,
 		ingest.WithSpoolSyncEveryN(2000),
 		ingest.WithSpoolSyncEveryDur(20*time.Millisecond),
 	)
+	if err != nil {
+		return nil, err
+	}
 
-	disp := dispatcher.NewDispatcher(8192)
+	disp := dispatcher.NewDispatcher(8192, procBench)
 	addrs := ids.NewAddressID(64, 1<<12)
 	tokens := ids.NewTokenID(32, 1<<10)
 	adapter := ingest.NewMockChainAdapter(addrs, tokens)
@@ -67,26 +73,27 @@ func New(cfg Config) (*Processor, error) {
 	}
 
 	cons, err := NewConsumerWithClient(client, cfg.Group) // 确保这里别覆盖 config
-	ig := ingest.NewIngestor(cfg.ReadyFifo, disp, sp, cfg.DecodeWorker, cfg.DecodeQueue, adapter, client, cfg.Topic)
+	ig := ingest.NewIngestor(cfg.ReadyFifo, disp, sp, cfg.DecodeWorker, cfg.DecodeQueue, adapter, client, cfg.Topic, procBench)
 
 	sink, _ := out.NewKafkaSink([]string{"127.0.0.1:9092"}, "logpipe.out", kc)
 
 	allOpen := false
 
 	wins := []*window.Runner{
-		window.NewRunner(0, disp, sink, &allOpen, false, &window.EmitTick{Every: 50}),
-		window.NewRunner(1, disp, sink, &allOpen, false, &window.EmitTick{Every: 200}),
-		window.NewRunner(2, disp, sink, &allOpen, false, &window.EmitTick{Every: 1000}),
-		window.NewRunner(3, disp, sink, &allOpen, true, &window.EmitTick{Every: 5000}),
+		window.NewRunner(0, disp, sink, &allOpen, false, procBench, &window.EmitTick{Every: 50}),
+		window.NewRunner(1, disp, sink, &allOpen, false, procBench, &window.EmitTick{Every: 200}),
+		window.NewRunner(2, disp, sink, &allOpen, false, procBench, &window.EmitTick{Every: 1000}),
+		window.NewRunner(3, disp, sink, &allOpen, true, procBench, &window.EmitTick{Every: 5000}),
 	}
 
 	return &Processor{
-		cfg:      cfg,
-		cons:     cons,
-		spool:    sp,
-		disp:     disp,
-		ingestor: ig,
-		wins:     wins,
+		cfg:       cfg,
+		cons:      cons,
+		spool:     sp,
+		disp:      disp,
+		ingestor:  ig,
+		wins:      wins,
+		procBench: procBench,
 	}, nil
 }
 
@@ -103,10 +110,41 @@ func (p *Processor) Close() error {
 	if p.spool != nil {
 		_ = p.spool.Close()
 	}
+	if p.procBench != nil {
+		p.procBench.Stop()
+	}
 	return nil
 }
 
 func (p *Processor) Run(ctx context.Context) error {
+	go func() {
+		select {
+		case <-ctx.Done():
+			return
+		case <-p.ingestor.ReadyBenchCh():
+		}
+		t := time.NewTicker(1 * time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				if p.procBench == nil {
+					continue
+				}
+				ln, cp := p.ingestor.RawChSnapshot()
+				s := bench.ProcSnapshot{
+					RawChLen: ln,
+					RawChCap: cp,
+				}
+				ws := p.disp.WinChSnapshot()
+				s.WinChLen = ws.Len
+				s.WinChCap = ws.Cap
+				p.procBench.SetSnapshot(s)
+			}
+		}
+	}()
 	// 1) 启动窗口实例（跟随 ctx 生命周期）
 	for _, w := range p.wins {
 		w := w

@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/chenzhangda16/web3-logpipe/internal/logpipe/bench"
 )
 
 type Ckpt struct {
@@ -95,7 +97,7 @@ func pushLatestCkpt(ch chan Ckpt, v Ckpt) {
 	}
 }
 
-func ckptLoopPeriodic(ctx context.Context, ch <-chan Ckpt, ck Checkpoint, every time.Duration, bench *FetchBench) error {
+func ckptLoopPeriodic(ctx context.Context, ch <-chan Ckpt, ck Checkpoint, every time.Duration, bench *bench.FetchBench) error {
 	var pending *Ckpt
 	tk := time.NewTicker(every)
 	defer tk.Stop()
