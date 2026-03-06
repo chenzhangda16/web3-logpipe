@@ -6,8 +6,9 @@ import (
 	"time"
 )
 
-// var sep string = "\n"
-var sep string = " "
+var sep string = "\n"
+
+//var sep string = " "
 
 func percentiles(ns []int64) (p50, p90, p99 time.Duration) {
 	if len(ns) == 0 {
