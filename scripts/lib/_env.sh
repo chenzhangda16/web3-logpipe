@@ -1,17 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-_root_dir_from_env_sh() {
-  cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd
-}
-
 load_env_stack() {
   local mode="${1:?mode required}"  # local | cluster
-  local root
-  root="$(_root_dir_from_env_sh)"
 
-  local common_env="$root/scripts/env/common.env"
-  local mode_env="$root/scripts/env/${mode}.env"
+  local common_env="$ENV_DIR/common.env"
+  local mode_env="$ENV_DIR/${mode}.env"
 
   [[ -f "$common_env" ]] || {
     echo "missing env file: $common_env" >&2
@@ -26,4 +20,47 @@ load_env_stack() {
   source "$common_env"
   source "$mode_env"
   set +a
+
+  # -------------------- compatibility / derived env --------------------
+
+  # postgres canonical -> compatibility
+  PG_DB_NAME="${PG_DB}"
+  PG_DB_USER="${PG_USER}"
+  PG_DB_PASS="${PG_PASS}"
+  PG_DB_OWNER="${PG_DB_OWNER:-$PG_USER}"
+  PG_SUPERUSER="${PG_SUPERUSER:-$(id -un)}"
+
+  PG_DSN="${PG_DSN:-postgres://${PG_USER}:${PG_PASS}@${PG_HOST}:${PG_PORT}/${PG_DB}?sslmode=disable}"
+  PG_ADMIN_DSN="${PG_ADMIN_DSN:-postgres://${PG_SUPERUSER}@${PG_HOST}:${PG_PORT}/postgres?sslmode=disable}"
+
+  # mock / rpc
+  MOCK_RPC="${MOCK_RPC_HOST}:${MOCK_RPC_PORT}"
+  RPC_BASE="${RPC_BASE:-http://${MOCK_RPC}}"
+
+  # kafka
+  KAFKA_BROKERS="${KAFKA_BROKERS:-${KAFKA_HOST}:${KAFKA_PORT}}"
+  KAFKA_TOPIC="${IN_TOPIC}"
+
+  KAFKA_SERVER_START="${KAFKA_SERVER_START:-$KAFKA_HOME/bin/kafka-server-start.sh}"
+  KAFKA_STORAGE="${KAFKA_STORAGE:-$KAFKA_HOME/bin/kafka-storage.sh}"
+  KAFKA_TOPICS_SH="${KAFKA_TOPICS_SH:-kafka-topics.sh}"
+  KAFKA_CONFIG="${KAFKA_CONFIG:-$KAFKA_HOME/config/kraft/server.properties}"
+
+  IN_PARTITIONS="${KAFKA_IN_PARTITIONS}"
+  OUT_PARTITIONS="${KAFKA_OUT_PARTITIONS}"
+
+  # kill pattern for factory_reset
+  APP_KILL_RE="${APP_KILL_RE:-/bin/(mockchain|fetcher|processor|writer)\b}"
+
+  # proxy compatibility
+  no_proxy="${no_proxy:-$NO_PROXY}"
+
+  export PG_DB_NAME PG_DB_USER PG_DB_PASS PG_DB_OWNER PG_SUPERUSER
+  export PG_DSN PG_ADMIN_DSN
+  export MOCK_RPC RPC_BASE
+  export KAFKA_BROKERS KAFKA_TOPIC
+  export KAFKA_SERVER_START KAFKA_STORAGE KAFKA_TOPICS_SH KAFKA_CONFIG
+  export IN_PARTITIONS OUT_PARTITIONS
+  export APP_KILL_RE
+  export no_proxy
 }

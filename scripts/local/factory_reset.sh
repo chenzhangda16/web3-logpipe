@@ -13,35 +13,8 @@ set -euo pipefail
 #   $ROOT_DIR/data/kafka/server.properties
 # ------------------------------------------------------------------------------
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-
-# -------- app proc patterns (your preferred "simple brutal") -------------------
-APP_KILL_RE='/bin/(mockchain|fetcher|processor|writer)\b'
-
-# ----------------------------- PG defaults ------------------------------------
-PG_DSN="${PG_DSN:-postgres://web3:web3@192.168.1.50:55432/web3log?sslmode=disable}"
-PG_ADMIN_DSN="${PG_ADMIN_DSN:-postgres://chenchangda@192.168.1.50:55432/postgres?sslmode=disable}"
-PG_HOST="${PG_HOST:-192.168.1.50}"
-PG_PORT="${PG_PORT:-55432}"
-PG_DB_NAME="${PG_DB_NAME:-web3log}"
-PG_DB_OWNER="${PG_DB_OWNER:-web3}"
-
-# ----------------------------- Kafka defaults (align ensure_kafka.sh) ----------
-KAFKA_BROKERS="${KAFKA_BROKERS:-192.168.1.50:9092}"
-PID_DIR="${PID_DIR:-$ROOT_DIR/data/pids}"
-LOG_DIR="${LOG_DIR:-$ROOT_DIR/logs/local}"
-
-KAFKA_HOME="${KAFKA_HOME:-/opt/kafka_2.13-3.8.0}"
-KAFKA_SERVER_START="${KAFKA_SERVER_START:-$KAFKA_HOME/bin/kafka-server-start.sh}"
-
-KAFKA_PROJECT_DIR="${KAFKA_PROJECT_DIR:-$ROOT_DIR/data/kafka}"
-KAFKA_PROJECT_LOG_DIR="${KAFKA_PROJECT_LOG_DIR:-$KAFKA_PROJECT_DIR/logs/local}"
-KAFKA_PROJECT_CONFIG="${KAFKA_PROJECT_CONFIG:-$KAFKA_PROJECT_DIR/server.properties}"
-
-KAFKA_PID_FILE="${KAFKA_PID_FILE:-$PID_DIR/kafka.pid}"
-KAFKA_TAIL_PID_FILE="${KAFKA_TAIL_PID_FILE:-$PID_DIR/kafka_tail.pid}"
-
-mkdir -p "$PID_DIR" "$LOG_DIR"
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/scripts/lib/_bootstrap.sh"
+bootstrap local
 
 ts() { date '+%F %T'; }
 log() { echo "[$(ts)] [factory_reset] $*"; }
@@ -135,16 +108,6 @@ main() {
   "$ROOT_DIR/scripts/local/ensure_pg.sh"
 
   log "Re-bootstrap Kafka (ensure_kafka.sh)..."
-
-#  : "${KAFKA_TOPIC:=mockchain.blocks}"
-#  : "${OUT_TOPIC:=logpipe.out}"
-#  : "${KAFKA_IN_PARTITIONS:=1}"
-#  : "${KAFKA_OUT_PARTITIONS:=1}"
-#
-#  export IN_TOPIC="$KAFKA_TOPIC"
-#  export OUT_TOPIC="$OUT_TOPIC"
-#  export KAFKA_IN_PARTITIONS="$KAFKA_IN_PARTITIONS"
-#  export KAFKA_OUT_PARTITIONS="$KAFKA_OUT_PARTITIONS"
 
   "$ROOT_DIR/scripts/local/ensure_kafka.sh"
 

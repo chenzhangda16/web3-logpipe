@@ -7,64 +7,8 @@
 
 set -euo pipefail
 
-# ----------------------------
-# paths
-# ----------------------------
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-cd "$ROOT_DIR"
-
-PID_DIR="./data/pids"
-LOG_DIR="./logs/local"
-PID_FILE="$PID_DIR/logpipe.pids"
-
-mkdir -p "$PID_DIR" "$LOG_DIR" ./bin
-
-# ----------------------------
-# config (override via env)
-# ----------------------------
-export NO_PROXY="localhost,192.168.1.50,::1"
-export no_proxy="$NO_PROXY"
-
-# PG bootstrap (db/user) + set PG_DSN
-
-export PG_DSN="postgres://${PG_DB_USER:-web3}:${PG_DB_PASS:-web3}@${PG_HOST:-192.168.1.50}:${PG_PORT:-55432}/${PG_DB_NAME:-web3log}?sslmode=disable"
-
-: "${MOCK_DB:=./data/mockchain.db}"
-: "${MOCK_RPC:=192.168.1.50:18080}"
-: "${MOCK_ADDR:=5000}"
-: "${MOCK_TICK:=1s}"
-: "${MOCK_DET:=false}"
-: "${MOCK_SEED:=1}"
-: "${MOCK_BACKFILL_SEC:=86400}"
-: "${MOCK_GAP_SEC:=0}"
-
-: "${KAFKA_BROKERS:=192.168.1.50:9092}"
-: "${KAFKA_TOPIC:=mockchain.blocks}"
-#: "${KAFKA_IN_PARTITIONS:=4}"
-
-: "${FETCH_BACKFILL_SEC:=86400}"
-: "${FETCH_PAGE:=200}"
-: "${FETCH_POLL_HEAD:=2s}"
-: "${FETCH_CKPT:=./data/fetcher.ckpt}"
-: "${CKPT_TICK:=1s}"
-: "${PERF_MODE:=bench}"
-: "${RPC_BASE:=http://$MOCK_RPC}"
-: "${RPC_CONCURRENCY:=8}"
-
-: "${PROC_GROUP:=logpipe-processor}"
-: "${PROC_SPOOL:=./data/spool.wal}"
-: "${PROC_DECODE_WORKER:=8}"
-: "${PROC_DECODE_QUEUE:=8192}"
-: "${PROC_CKPT:=./data/processor.ckpt}"
-
-: "${OUT_TOPIC:=logpipe.out}"
-#: "${KAFKA_OUT_PARTITIONS:=1}"
-: "${WRITER_GROUP:=logpipe.writer}"
-
-: "${NO_BUILD:=false}"
-
-READY_DIR="$ROOT_DIR/data/ready"
-mkdir -p "$READY_DIR"
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/scripts/lib/_bootstrap.sh"
+bootstrap local
 
 wait_ready_fifo() {
   local fifo="$1"

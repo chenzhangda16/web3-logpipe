@@ -10,39 +10,11 @@ set -euo pipefail
 # - Export PG_DSN
 # - Avoid colliding with system postgres (default port uses 55432, not 5432)
 # - Refuse to operate if connected cluster's data_directory != expected PGDATA
-#
-# Env (override):
-#   PG_HOST=192.168.1.50
-#   PG_PORT=55432
-#   PG_DB=web3log
-#   PG_USER=web3
-#   PG_PASS=web3
-#
-#   PGDATA=<repo>/data/pg/data
-#   PG_LOG_DIR=<repo>/logs/local
-#   PG_INITDB_AUTH=trust
-#   PG_SUPERUSER=<current os user>
 # ------------------------------------------------------------------------------
-
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-PID_DIR="${PID_DIR:-$ROOT_DIR/data/pids}"
-LOG_DIR="${LOG_DIR:-$ROOT_DIR/logs/local}"
-mkdir -p "$PID_DIR" "$LOG_DIR"
-
-PG_HOST="${PG_HOST:-192.168.1.50}"
-PG_PORT="${PG_PORT:-55432}"
-PG_DB="${PG_DB:-web3log}"
-PG_USER="${PG_USER:-web3}"
-PG_PASS="${PG_PASS:-web3}"
-
-PGDATA="${PGDATA:-$ROOT_DIR/data/pg/data}"
-PG_LOG_DIR="${PG_LOG_DIR:-$LOG_DIR}"
-PG_INITDB_AUTH="${PG_INITDB_AUTH:-trust}"
-PG_SUPERUSER="${PG_SUPERUSER:-$(id -un)}"
-
-# explicit TCP
-export PGHOST="$PG_HOST"
-export PGPORT="$PG_PORT"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/scripts/lib/_bootstrap.sh"
+  bootstrap local
+fi
 
 pglog() { echo "[$(date '+%F %T')] [ensure_pg] $*"; }
 warn()  { echo "[$(date '+%F %T')] [ensure_pg] WARN: $*" >&2; }

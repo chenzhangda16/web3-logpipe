@@ -19,42 +19,11 @@ set -euo pipefail
 #   KAFKA_BROKERS=192.168.1.50:9092
 #   KAFKA_HOME=/opt/kafka_2.13-3.8.0
 #   KAFKA_CONFIG=$KAFKA_HOME/config/kraft/server.properties
-#
-# Optional overrides:
-#   KAFKA_BIN=/path/to/kafka-topics.sh
-#   KAFKA_SERVER_START=/path/to/kafka-server-start.sh
-#   KAFKA_STORAGE=/path/to/kafka-storage.sh
-#   IN_TOPIC=mockchain.blocks
-#   OUT_TOPIC=logpipe.out
-#   KAFKA_IN_PARTITIONS=1
-#   KAFKA_OUT_PARTITIONS=1
-#   PID_DIR=... LOG_DIR=... KAFKA_PID_FILE=...
 # ------------------------------------------------------------------------------
-
-# ----------------------------- config defaults --------------------------------
-KAFKA_BROKERS="${KAFKA_BROKERS:-192.168.1.50:9092}"
-KAFKA_HOME="${KAFKA_HOME:-/opt/kafka_2.13-3.8.0}"
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-KAFKA_CONFIG="${KAFKA_CONFIG:-$KAFKA_HOME/config/kraft/server.properties}"
-KAFKA_PROJECT_DIR="${KAFKA_PROJECT_DIR:-$ROOT_DIR/data/kafka}"
-KAFKA_PROJECT_LOG_DIR="${KAFKA_PROJECT_LOG_DIR:-$KAFKA_PROJECT_DIR/logs}"
-KAFKA_PROJECT_CONFIG="${KAFKA_PROJECT_CONFIG:-$KAFKA_PROJECT_DIR/server.properties}"
-mkdir -p "$KAFKA_PROJECT_DIR" "$KAFKA_PROJECT_LOG_DIR"
-PID_DIR="${PID_DIR:-$ROOT_DIR/data/pids}"
-LOG_DIR="${LOG_DIR:-$ROOT_DIR/logs/local}"
-KAFKA_PID_FILE="${KAFKA_PID_FILE:-$PID_DIR/kafka.pid}"
-KAFKA_TAIL_PID_FILE="${KAFKA_TAIL_PID_FILE:-$PID_DIR/kafka_tail.pid}"
-
-mkdir -p "$PID_DIR" "$LOG_DIR"
-
-KAFKA_TOPICS_SH="${KAFKA_BIN:-kafka-topics.sh}"
-KAFKA_SERVER_START="${KAFKA_SERVER_START:-$KAFKA_HOME/bin/kafka-server-start.sh}"
-KAFKA_STORAGE="${KAFKA_STORAGE:-$KAFKA_HOME/bin/kafka-storage.sh}"
-
-IN_TOPIC="${IN_TOPIC:-mockchain.blocks}"
-OUT_TOPIC="${OUT_TOPIC:-logpipe.out}"
-IN_PARTITIONS="${KAFKA_IN_PARTITIONS:-1}"
-OUT_PARTITIONS="${KAFKA_OUT_PARTITIONS:-1}"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/scripts/lib/_bootstrap.sh"
+  bootstrap local
+fi
 
 # ----------------------------- tiny logger ------------------------------------
 ts() { date '+%H:%M:%S'; }
