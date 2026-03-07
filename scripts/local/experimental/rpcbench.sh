@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# chmod +x scripts/rpcbench.sh
-# ./scripts/rpcbench.sh start
-# ./scripts/rpcbench.sh status
-# ./scripts/rpcbench.sh logs
-# ./scripts/rpcbench.sh stop
-# ./scripts/rpcbench.sh restart
+# chmod +x scripts/local/rpcbench.sh
+# ./scripts/local/rpcbench.sh start
+# ./scripts/local/rpcbench.sh status
+# ./scripts/local/rpcbench.sh logs
+# ./scripts/local/rpcbench.sh stop
+# ./scripts/local/rpcbench.sh restart
 
 set -euo pipefail
 
@@ -15,7 +15,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
 PID_DIR="./data/pids"
-LOG_DIR="./logs"
+LOG_DIR="./logs/local"
 PID_FILE="$PID_DIR/rpcbench.pids"
 
 mkdir -p "$PID_DIR" "$LOG_DIR" ./bin
@@ -23,11 +23,11 @@ mkdir -p "$PID_DIR" "$LOG_DIR" ./bin
 # ----------------------------
 # config (override via env)
 # ----------------------------
-export NO_PROXY="localhost,127.0.0.1,::1"
+export NO_PROXY="localhost,192.168.1.50,::1"
 export no_proxy="$NO_PROXY"
 
 : "${MOCK_DB:=./data/mockchain.db}"
-: "${MOCK_RPC:=127.0.0.1:18080}"
+: "${MOCK_RPC:=192.168.1.50:18080}"
 : "${MOCK_ADDR:=5000}"
 : "${MOCK_TICK:=1s}"
 : "${MOCK_DET:=false}"
@@ -238,7 +238,7 @@ start() {
 
     if [[ "$alive" == "true" ]]; then
       log "service appears to be running"
-      log "use: ./scripts/rpcbench.sh status OR stop"
+      log "use: ./scripts/local/rpcbench.sh status OR stop"
       exit 1
     else
       log "stale pidfile detected (all pids dead), cleaning up"
@@ -306,9 +306,9 @@ start() {
   log "  BENCH_FROM=$BENCH_FROM"
   log "  BENCH_SECONDS=$BENCH_SECONDS"
   log "use:"
-  log "  ./scripts/rpcbench.sh status"
-  log "  ./scripts/rpcbench.sh logs"
-  log "  ./scripts/rpcbench.sh stop"
+  log "  ./scripts/local/rpcbench.sh status"
+  log "  ./scripts/local/rpcbench.sh logs"
+  log "  ./scripts/local/rpcbench.sh stop"
 }
 
 stop() { stop_by_pidfile; }
@@ -320,7 +320,7 @@ restart() {
 
 usage() {
   cat <<EOF
-Usage: ./scripts/rpcbench.sh <command>
+Usage: ./scripts/local/rpcbench.sh <command>
 
 commands:
   start     start mockchain + rpcbench in background (pidfile)

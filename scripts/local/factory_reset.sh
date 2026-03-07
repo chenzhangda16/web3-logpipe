@@ -13,29 +13,29 @@ set -euo pipefail
 #   $ROOT_DIR/data/kafka/server.properties
 # ------------------------------------------------------------------------------
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 # -------- app proc patterns (your preferred "simple brutal") -------------------
 APP_KILL_RE='/bin/(mockchain|fetcher|processor|writer)\b'
 
 # ----------------------------- PG defaults ------------------------------------
-PG_DSN="${PG_DSN:-postgres://web3:web3@127.0.0.1:5432/web3log?sslmode=disable}"
-PG_ADMIN_DSN="${PG_ADMIN_DSN:-postgres://chenchangda@127.0.0.1:5432/postgres?sslmode=disable}"
-PG_HOST="${PG_HOST:-127.0.0.1}"
-PG_PORT="${PG_PORT:-5432}"
+PG_DSN="${PG_DSN:-postgres://web3:web3@192.168.1.50:55432/web3log?sslmode=disable}"
+PG_ADMIN_DSN="${PG_ADMIN_DSN:-postgres://chenchangda@192.168.1.50:55432/postgres?sslmode=disable}"
+PG_HOST="${PG_HOST:-192.168.1.50}"
+PG_PORT="${PG_PORT:-55432}"
 PG_DB_NAME="${PG_DB_NAME:-web3log}"
 PG_DB_OWNER="${PG_DB_OWNER:-web3}"
 
 # ----------------------------- Kafka defaults (align ensure_kafka.sh) ----------
-KAFKA_BROKERS="${KAFKA_BROKERS:-127.0.0.1:9092}"
+KAFKA_BROKERS="${KAFKA_BROKERS:-192.168.1.50:9092}"
 PID_DIR="${PID_DIR:-$ROOT_DIR/data/pids}"
-LOG_DIR="${LOG_DIR:-$ROOT_DIR/logs}"
+LOG_DIR="${LOG_DIR:-$ROOT_DIR/logs/local}"
 
 KAFKA_HOME="${KAFKA_HOME:-/opt/kafka_2.13-3.8.0}"
 KAFKA_SERVER_START="${KAFKA_SERVER_START:-$KAFKA_HOME/bin/kafka-server-start.sh}"
 
 KAFKA_PROJECT_DIR="${KAFKA_PROJECT_DIR:-$ROOT_DIR/data/kafka}"
-KAFKA_PROJECT_LOG_DIR="${KAFKA_PROJECT_LOG_DIR:-$KAFKA_PROJECT_DIR/logs}"
+KAFKA_PROJECT_LOG_DIR="${KAFKA_PROJECT_LOG_DIR:-$KAFKA_PROJECT_DIR/logs/local}"
 KAFKA_PROJECT_CONFIG="${KAFKA_PROJECT_CONFIG:-$KAFKA_PROJECT_DIR/server.properties}"
 
 KAFKA_PID_FILE="${KAFKA_PID_FILE:-$PID_DIR/kafka.pid}"
@@ -89,7 +89,7 @@ kafka_stop_fallback() {
 }
 
 rm_kafka_project_storage() {
-  # Only delete project-owned kafka storage/logs.
+  # Only delete project-owned kafka storage/logs/local.
   if [[ -d "$KAFKA_PROJECT_DIR" ]]; then
     log "Removing Kafka project dir: $KAFKA_PROJECT_DIR"
     rm -rf "$KAFKA_PROJECT_DIR"
@@ -132,7 +132,7 @@ main() {
   pg_reset_business_db
 
   log "Re-bootstrap Postgres (ensure_pg.sh)..."
-  "$ROOT_DIR/scripts/ensure_pg.sh"
+  "$ROOT_DIR/scripts/local/ensure_pg.sh"
 
   log "Re-bootstrap Kafka (ensure_kafka.sh)..."
 
@@ -146,7 +146,7 @@ main() {
 #  export KAFKA_IN_PARTITIONS="$KAFKA_IN_PARTITIONS"
 #  export KAFKA_OUT_PARTITIONS="$KAFKA_OUT_PARTITIONS"
 
-  "$ROOT_DIR/scripts/ensure_kafka.sh"
+  "$ROOT_DIR/scripts/local/ensure_kafka.sh"
 
   case "${FULL_RESET:-0}" in
     2)
@@ -175,4 +175,4 @@ main() {
 }
 
 main "$@"
-#FULL_RESET=1 ./scripts/factory_reset.sh
+#FULL_RESET=1 ./scripts/local/factory_reset.sh

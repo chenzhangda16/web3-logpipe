@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PID_DIR="${PID_DIR:-$ROOT_DIR/data/pids}"
-LOG_DIR="${LOG_DIR:-$ROOT_DIR/data/logs}"
+LOG_DIR="${LOG_DIR:-$ROOT_DIR/data/logs/local}"
 
 KAFKA_HOME="${KAFKA_HOME:-/opt/kafka_2.13-3.8.0}"
 KAFKA_PID_FILE="${KAFKA_PID_FILE:-$PID_DIR/kafka.pid}"

@@ -3,10 +3,10 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PID_DIR="${PID_DIR:-$ROOT_DIR/data/pids}"
-LOG_DIR="${LOG_DIR:-$ROOT_DIR/data/logs}"
+LOG_DIR="${LOG_DIR:-$ROOT_DIR/data/logs/local}"
 
 PGDATA="${PGDATA:-$ROOT_DIR/data/pg/data}"
-PG_HOST="${PG_HOST:-127.0.0.1}"
+PG_HOST="${PG_HOST:-192.168.1.50}"
 PG_PORT="${PG_PORT:-5432}"
 
 TAIL_PID_FILE="${TAIL_PID_FILE:-$PID_DIR/postgres_tail.pid}"

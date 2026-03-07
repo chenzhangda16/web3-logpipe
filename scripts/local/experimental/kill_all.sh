@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-LOG_DIR="$ROOT_DIR/data/logs"
+LOG_DIR="$ROOT_DIR/data/logs/local"
 PID_DIR="$ROOT_DIR/data/pids"
 
 say() { echo "[kill_all] $*"; }
@@ -59,7 +59,7 @@ say "killing web3-logpipe-related processes (tight scope)..."
 # 0) Kill any running logpipe.sh itself (the orchestrator) under this repo
 #    (handles the 'subshell stuck' case: start never reached write_pids)
 lp_pids="$(pids_by_pattern "$ROOT_DIR/scripts/logpipe\.sh")"
-# also catch "bash ./scripts/logpipe.sh start" launched from repo
+# also catch "bash ./scripts/local/logpipe.sh start" launched from repo
 lp2_pids="$(pids_by_pattern "bash .*${ROOT_DIR}/scripts/logpipe\.sh")"
 kill_pids "logpipe.sh" $lp_pids $lp2_pids
 

@@ -16,7 +16,7 @@ set -euo pipefail
 #   5) Ensure required topics exist
 #
 # Env (pin these in scripts/logpipe.sh or scripts/env.sh):
-#   KAFKA_BROKERS=127.0.0.1:9092
+#   KAFKA_BROKERS=192.168.1.50:9092
 #   KAFKA_HOME=/opt/kafka_2.13-3.8.0
 #   KAFKA_CONFIG=$KAFKA_HOME/config/kraft/server.properties
 #
@@ -32,16 +32,16 @@ set -euo pipefail
 # ------------------------------------------------------------------------------
 
 # ----------------------------- config defaults --------------------------------
-KAFKA_BROKERS="${KAFKA_BROKERS:-127.0.0.1:9092}"
+KAFKA_BROKERS="${KAFKA_BROKERS:-192.168.1.50:9092}"
 KAFKA_HOME="${KAFKA_HOME:-/opt/kafka_2.13-3.8.0}"
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 KAFKA_CONFIG="${KAFKA_CONFIG:-$KAFKA_HOME/config/kraft/server.properties}"
 KAFKA_PROJECT_DIR="${KAFKA_PROJECT_DIR:-$ROOT_DIR/data/kafka}"
 KAFKA_PROJECT_LOG_DIR="${KAFKA_PROJECT_LOG_DIR:-$KAFKA_PROJECT_DIR/logs}"
 KAFKA_PROJECT_CONFIG="${KAFKA_PROJECT_CONFIG:-$KAFKA_PROJECT_DIR/server.properties}"
 mkdir -p "$KAFKA_PROJECT_DIR" "$KAFKA_PROJECT_LOG_DIR"
 PID_DIR="${PID_DIR:-$ROOT_DIR/data/pids}"
-LOG_DIR="${LOG_DIR:-$ROOT_DIR/logs}"
+LOG_DIR="${LOG_DIR:-$ROOT_DIR/logs/local}"
 KAFKA_PID_FILE="${KAFKA_PID_FILE:-$PID_DIR/kafka.pid}"
 KAFKA_TAIL_PID_FILE="${KAFKA_TAIL_PID_FILE:-$PID_DIR/kafka_tail.pid}"
 
@@ -67,8 +67,9 @@ broker_port() { echo "${KAFKA_BROKERS##*:}"; }
 
 kafka_is_up() {
   local h p
-  h="$(broker_host)"; p="$(broker_port)"
-  (echo >/dev/tcp/$h/$p) >/dev/null 2>&1
+  h="$(broker_host)"
+  p="$(broker_port)"
+  timeout 1 bash -c "exec 3<>/dev/tcp/$h/$p" >/dev/null 2>&1
 }
 
 kafka_wait_up() {
@@ -243,39 +244,6 @@ topic_exists() {
   "$KAFKA_TOPICS_SH" --bootstrap-server "$KAFKA_BROKERS" --list | grep -qx "$topic"
 }
 
-#topic_partitions() {
-#  local topic="$1"
-#  # Parse "PartitionCount:" from --describe output
-#  "$KAFKA_TOPICS_SH" --bootstrap-server "$KAFKA_BROKERS" --describe --topic "$topic" 2>/dev/null \
-#    | awk -F'PartitionCount:' 'NR==1{print $2}' \
-#    | awk '{print $1}' \
-#    | tr -d '\r'
-#}
-#
-#ensure_topic() {
-#  local topic="$1" desired="$2"
-#
-#  if ! topic_exists "$topic"; then
-#    kafkalog "Creating topic: $topic (partitions=$desired)"
-#    "$KAFKA_TOPICS_SH" --bootstrap-server "$KAFKA_BROKERS" \
-#      --create --if-not-exists \
-#      --topic "$topic" \
-#      --partitions "$desired" \
-#      --replication-factor 1 >/dev/null
-#    return 0
-#  fi
-#
-#  # exists: ensure partitions >= desired
-#  local cur
-#  cur="$(topic_partitions "$topic")"
-#  # If parse failed, do nothing but keep it safe (you can add log later)
-#  [[ "$cur" =~ ^[0-9]+$ ]] || return 0
-#
-#  if (( cur < desired )); then
-#    "$KAFKA_TOPICS_SH" --bootstrap-server "$KAFKA_BROKERS" \
-#      --alter --topic "$topic" --partitions "$desired" >/dev/null
-#  fi
-#}
 ensure_topic() {
   local topic="$1" partitions="$2"
   topic_exists "$topic" && return 0

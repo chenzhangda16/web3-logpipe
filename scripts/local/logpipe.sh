@@ -1,20 +1,20 @@
 #!/usr/bin/env bash
-#chmod +x scripts/logpipe.sh
-#./scripts/logpipe.sh start
-#./scripts/logpipe.sh status
-#./scripts/logpipe.sh logs
-#./scripts/logpipe.sh stop
+#chmod +x scripts/local/logpipe.sh
+#./scripts/local/logpipe.sh start
+#./scripts/local/logpipe.sh status
+#./scripts/local/logpipe.sh logs
+#./scripts/local/logpipe.sh stop
 
 set -euo pipefail
 
 # ----------------------------
 # paths
 # ----------------------------
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT_DIR"
 
 PID_DIR="./data/pids"
-LOG_DIR="./logs"
+LOG_DIR="./logs/local"
 PID_FILE="$PID_DIR/logpipe.pids"
 
 mkdir -p "$PID_DIR" "$LOG_DIR" ./bin
@@ -22,15 +22,15 @@ mkdir -p "$PID_DIR" "$LOG_DIR" ./bin
 # ----------------------------
 # config (override via env)
 # ----------------------------
-export NO_PROXY="localhost,127.0.0.1,::1"
+export NO_PROXY="localhost,192.168.1.50,::1"
 export no_proxy="$NO_PROXY"
 
 # PG bootstrap (db/user) + set PG_DSN
 
-export PG_DSN="postgres://${PG_DB_USER:-web3}:${PG_DB_PASS:-web3}@${PG_HOST:-127.0.0.1}:${PG_PORT:-5432}/${PG_DB_NAME:-web3log}?sslmode=disable"
+export PG_DSN="postgres://${PG_DB_USER:-web3}:${PG_DB_PASS:-web3}@${PG_HOST:-192.168.1.50}:${PG_PORT:-55432}/${PG_DB_NAME:-web3log}?sslmode=disable"
 
 : "${MOCK_DB:=./data/mockchain.db}"
-: "${MOCK_RPC:=127.0.0.1:18080}"
+: "${MOCK_RPC:=192.168.1.50:18080}"
 : "${MOCK_ADDR:=5000}"
 : "${MOCK_TICK:=1s}"
 : "${MOCK_DET:=false}"
@@ -38,7 +38,7 @@ export PG_DSN="postgres://${PG_DB_USER:-web3}:${PG_DB_PASS:-web3}@${PG_HOST:-127
 : "${MOCK_BACKFILL_SEC:=86400}"
 : "${MOCK_GAP_SEC:=0}"
 
-: "${KAFKA_BROKERS:=127.0.0.1:9092}"
+: "${KAFKA_BROKERS:=192.168.1.50:9092}"
 : "${KAFKA_TOPIC:=mockchain.blocks}"
 #: "${KAFKA_IN_PARTITIONS:=4}"
 
@@ -129,7 +129,7 @@ kafka_is_up() { probe_tcp "$(kafka_host)" "$(kafka_port)"; }
 
 pg_is_up() {
   have_cmd pg_isready || return 2
-  pg_isready -h "${PG_HOST:-127.0.0.1}" -p "${PG_PORT:-5432}" >/dev/null 2>&1
+  pg_isready -h "${PG_HOST:-192.168.1.50}" -p "${PG_PORT:-55432}" >/dev/null 2>&1
 }
 
 read_file_1st_line() {
@@ -278,7 +278,7 @@ status() {
   fi
   log "kafka log: $kafka_latest"
 
-  local kafka_data_dir="$ROOT_DIR/data/kafka/logs"
+  local kafka_data_dir="$ROOT_DIR/data/kafka/logs/local"
   log "kafka data dir: $kafka_data_dir"
 
 
@@ -289,10 +289,10 @@ status() {
   local pg_latest="$LOG_DIR/postgres.latest.log"
 
   if pg_is_up; then
-    log "postgres: OK  ${PG_HOST:-127.0.0.1}:${PG_PORT:-5432}"
+    log "postgres: OK  ${PG_HOST:-192.168.1.50}:${PG_PORT:-55432}"
   else
     if have_cmd pg_isready; then
-      log "postgres: BAD ${PG_HOST:-127.0.0.1}:${PG_PORT:-5432}"
+      log "postgres: BAD ${PG_HOST:-192.168.1.50}:${PG_PORT:-55432}"
     else
       log "postgres: (unknown, pg_isready not installed)"
     fi
@@ -392,7 +392,7 @@ start() {
 
     if [[ "$alive" == "true" ]]; then
       log "service appears to be running"
-      log "use: ./scripts/logpipe.sh status OR stop"
+      log "use: ./scripts/local/logpipe.sh status OR stop"
       exit 1
     else
       log "stale pidfile detected (all pids dead), cleaning up"
@@ -407,13 +407,13 @@ start() {
   # auto cleanup whatever has already been started.
   trap 'cleanup_start; exit 1' ERR INT TERM
 
-  source ./scripts/ensure_pg.sh
+  source ./scripts/local/ensure_pg.sh
 
 #  export IN_TOPIC="$KAFKA_TOPIC"
 #  export OUT_TOPIC="$OUT_TOPIC"
 #  export KAFKA_IN_PARTITIONS="$KAFKA_IN_PARTITIONS"
 #  export KAFKA_OUT_PARTITIONS="$KAFKA_OUT_PARTITIONS"
-  source ./scripts/ensure_kafka.sh
+  source ./scripts/local/ensure_kafka.sh
 
   need_cmd curl
   build_bins
@@ -526,9 +526,9 @@ start() {
   log "  OUT_TOPIC(out)=$OUT_TOPIC"
   log "  PG_DSN=$PG_DSN"
   log "use:"
-  log "  ./scripts/logpipe.sh status"
-  log "  ./scripts/logpipe.sh logs"
-  log "  ./scripts/logpipe.sh stop"
+  log "  ./scripts/local/logpipe.sh status"
+  log "  ./scripts/local/logpipe.sh logs"
+  log "  ./scripts/local/logpipe.sh stop"
 }
 
 stop() {
@@ -549,7 +549,7 @@ down() {
 
 usage() {
   cat <<EOF
-Usage: ./scripts/logpipe.sh <command>
+Usage: ./scripts/local/logpipe.sh <command>
 
 commands:
   start     start mockchain+fetcher+processor+writer in background (pidfile)
@@ -560,7 +560,7 @@ commands:
   down      stop components + stop kafka/postgres (project-managed infra)
 
 tips:
-  - If you manually started processes and pidfile is missing, use ./scripts/kill_all.sh as a last resort.
+  - If you manually started processes and pidfile is missing, use ./scripts/local/kill_all.sh as a last resort.
 EOF
 }
 
