@@ -75,7 +75,7 @@ func New(cfg Config) (*Processor, error) {
 	cons, err := NewConsumerWithClient(client, cfg.Group) // 确保这里别覆盖 config
 	ig := ingest.NewIngestor(cfg.ReadyFifo, disp, sp, cfg.DecodeWorker, cfg.DecodeQueue, adapter, client, cfg.Topic, procBench)
 
-	sink, _ := out.NewKafkaSink([]string{"127.0.0.1:9092"}, "logpipe.out", kc)
+	sink, _ := out.NewKafkaSink([]string{cfg.Brokers}, "logpipe.out", kc)
 
 	allOpen := false
 

@@ -352,11 +352,6 @@ start() {
   trap 'cleanup_start; exit 1' ERR INT TERM
 
   source ./scripts/local/ensure_pg.sh
-
-#  export IN_TOPIC="$KAFKA_TOPIC"
-#  export OUT_TOPIC="$OUT_TOPIC"
-#  export KAFKA_IN_PARTITIONS="$KAFKA_IN_PARTITIONS"
-#  export KAFKA_OUT_PARTITIONS="$KAFKA_OUT_PARTITIONS"
   source ./scripts/local/ensure_kafka.sh
 
   need_cmd curl
@@ -401,7 +396,7 @@ start() {
     start_with_dual_logs pid_writer writer "$writer_log" -- \
       ./bin/writer \
         -brokers "$KAFKA_BROKERS" \
-        -topic "$OUT_TOPIC" \
+        -topic "$KAFKA_OUT_TOPIC" \
         -group "$WRITER_GROUP" \
         -ready-fifo "$writer_fifo"
     append_pid "$pid_writer"
@@ -425,7 +420,7 @@ start() {
       ./bin/processor \
         -brokers "$KAFKA_BROKERS" \
         -group "$PROC_GROUP" \
-        -topic "$KAFKA_TOPIC" \
+        -topic "$KAFKA_IN_TOPIC" \
         -spool "$PROC_SPOOL" \
         -decode-worker "$PROC_DECODE_WORKER" \
         -decode-queue "$PROC_DECODE_QUEUE" \
@@ -449,7 +444,7 @@ start() {
         -rpc "$RPC_BASE" \
         -rpc-concurrency "$RPC_CONCURRENCY" \
         -brokers "$KAFKA_BROKERS" \
-        -topic "$KAFKA_TOPIC" \
+        -topic "$KAFKA_IN_TOPIC" \
         -backfill-sec "$FETCH_BACKFILL_SEC" \
         -page "$FETCH_PAGE" \
         -poll-head "$FETCH_POLL_HEAD" \
@@ -466,8 +461,8 @@ start() {
   log "env summary:"
   log "  RPC_BASE=$RPC_BASE"
   log "  KAFKA_BROKERS=$KAFKA_BROKERS"
-  log "  KAFKA_TOPIC(in)=$KAFKA_TOPIC"
-  log "  OUT_TOPIC(out)=$OUT_TOPIC"
+  log "  KAFKA_IN_TOPIC=$KAFKA_IN_TOPIC"
+  log "  KAFKA_OUT_TOPIC=$KAFKA_OUT_TOPIC"
   log "  PG_DSN=$PG_DSN"
   log "use:"
   log "  ./scripts/local/logpipe.sh status"
