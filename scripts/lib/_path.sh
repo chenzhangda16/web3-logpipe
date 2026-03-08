@@ -6,13 +6,14 @@ get_root_dir() {
 }
 
 load_path_stack() {
+  local mode="${1:?mode required}"  # local | cluster
   ROOT_DIR="$(get_root_dir)"
 
   SCRIPTS_DIR="$ROOT_DIR/scripts"
   ENV_DIR="$SCRIPTS_DIR/env"
 
   DATA_DIR="$ROOT_DIR/data"
-  LOG_DIR="$ROOT_DIR/logs/local"
+  LOG_DIR="$ROOT_DIR/logs/${mode}"
   BIN_DIR="$ROOT_DIR/bin"
 
   PID_DIR="$DATA_DIR/pids"
@@ -27,7 +28,7 @@ load_path_stack() {
   PG_LOG_DIR="$LOG_DIR"
 
   KAFKA_PROJECT_DIR="$DATA_DIR/kafka"
-  KAFKA_PROJECT_LOG_DIR="$KAFKA_PROJECT_DIR/logs/local"
+  KAFKA_PROJECT_LOG_DIR="$KAFKA_PROJECT_DIR/logs/${mode}"
   KAFKA_PROJECT_CONFIG="$KAFKA_PROJECT_DIR/server.properties"
 
   PID_FILE="$PID_DIR/logpipe.pids"
