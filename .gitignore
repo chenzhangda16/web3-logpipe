@@ -2,6 +2,7 @@
 data/
 *.db
 *.log
+logs/
 
 # ===== local config =====
 configs/*.local.yaml
