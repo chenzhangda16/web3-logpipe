@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # ------------------------------------------------------------------------------
-# ensure_pg.sh (Project-managed Postgres, pg_ctl only)
+# ensure_pg.sh (Project-managed Postgres, pg_ctl only, mac-compatible)
 #
 # Goals:
 # - Ensure cluster project-managed postgres is reachable; if not, initdb (if needed) + pg_ctl start
@@ -11,6 +11,7 @@ set -euo pipefail
 # - Avoid colliding with system postgres (default port uses 55432, not 5432)
 # - Refuse to operate if connected cluster's data_directory != expected PGDATA
 # ------------------------------------------------------------------------------
+
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
   source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/scripts/lib/_bootstrap.sh"
   bootstrap cluster
@@ -22,6 +23,18 @@ die()   { echo "[$(date '+%F %T')] [ensure_pg] ERROR: $*" >&2; exit 1; }
 
 have_cmd() {
   command -v "$1" >/dev/null 2>&1
+}
+
+is_macos() {
+  [[ "$(uname -s)" == "Darwin" ]]
+}
+
+sed_inplace() {
+  if is_macos; then
+    sed -i '' "$@"
+  else
+    sed -i "$@"
+  fi
 }
 
 canonical_path() {
@@ -75,7 +88,7 @@ ensure_runtime_config() {
   local conf="$PGDATA/postgresql.conf"
   [[ -f "$conf" ]] || die "postgresql.conf not found: $conf"
 
-  sed -i \
+  sed_inplace \
     -e "/^[[:space:]]*listen_addresses[[:space:]]*=/d" \
     -e "/^[[:space:]]*port[[:space:]]*=/d" \
     -e "/^[[:space:]]*unix_socket_directories[[:space:]]*=/d" \
@@ -83,7 +96,7 @@ ensure_runtime_config() {
 
   {
     echo ""
-    echo "# added by scripts/local/ensure_pg.sh"
+    echo "# added by scripts/cluster/ensure_pg.sh"
     echo "listen_addresses = '*'"
     echo "port = $PG_PORT"
     echo "unix_socket_directories = '$PGDATA'"
@@ -97,7 +110,7 @@ ensure_pg_hba() {
   if ! grep -Fqx "host    all    all    127.0.0.1/32      trust" "$hba"; then
     {
       echo ""
-      echo "# added by scripts/local/ensure_pg.sh"
+      echo "# added by scripts/cluster/ensure_pg.sh"
       echo "host    all    all    127.0.0.1/32      trust"
       echo "host    all    all    192.168.1.0/24    trust"
       echo "host    all    all    ::1/128           trust"
@@ -120,7 +133,7 @@ ensure_inited() {
   if [[ -f "$conf" ]]; then
     {
       echo ""
-      echo "# added by scripts/local/ensure_pg.sh"
+      echo "# added by scripts/cluster/ensure_pg.sh"
       echo "listen_addresses = '$PG_HOST'"
       echo "port = $PG_PORT"
       echo "unix_socket_directories = '$PGDATA'"
@@ -153,6 +166,8 @@ start_pg() {
   latest="$PG_LOG_DIR/postgres.latest.log"
   hist="$PG_LOG_DIR/postgres.$ts_full.log"
   tail_pid_file="$PID_DIR/postgres_tail.pid"
+
+  mkdir -p "$PG_LOG_DIR" "$PID_DIR"
 
   if [[ -f "$PGDATA/postmaster.pid" ]]; then
     local pid
@@ -239,26 +254,29 @@ export_dsn() {
   pglog "Exported PG_DSN=$PG_DSN"
 }
 
-# ----------------------------- main -------------------------------------------
-have_cmd pg_isready || die "pg_isready not found. Install postgresql-client."
-have_cmd psql      || die "psql not found. Install postgresql-client."
+ensure_pg_main() {
+  have_cmd pg_isready || die "pg_isready not found. Install postgresql-client."
+  have_cmd psql      || die "psql not found. Install postgresql-client."
 
-pglog "Checking Postgres: ${PG_HOST}:${PG_PORT} (expected PGDATA=$PGDATA)"
+  pglog "Checking Postgres: ${PG_HOST}:${PG_PORT} (expected PGDATA=$PGDATA)"
 
-if pg_is_up; then
-  pglog "Postgres reachable; verifying cluster identity..."
-  ensure_expected_cluster
-else
-  pglog "Postgres not reachable; attempting to start project-managed cluster (pg_ctl)..."
-  start_pg
-  ensure_expected_cluster
-fi
+  if pg_is_up; then
+    pglog "Postgres reachable; verifying cluster identity..."
+    ensure_expected_cluster
+  else
+    pglog "Postgres not reachable; attempting to start project-managed cluster (pg_ctl)..."
+    start_pg
+    ensure_expected_cluster
+  fi
 
-pg_wait_up 30 || die "Postgres still not reachable at ${PG_HOST}:${PG_PORT}. Check logs under: $PG_LOG_DIR"
+  pg_wait_up 30 || die "Postgres still not reachable at ${PG_HOST}:${PG_PORT}. Check logs under: $PG_LOG_DIR"
 
-pglog "Postgres reachable and cluster verified"
-ensure_role
-ensure_db
-ensure_privileges
-export_dsn
-pglog "OK"
+  pglog "Postgres reachable and cluster verified"
+  ensure_role
+  ensure_db
+  ensure_privileges
+  export_dsn
+  pglog "OK"
+}
+
+ensure_pg_main

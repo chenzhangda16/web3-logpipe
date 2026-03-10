@@ -2,140 +2,143 @@
 set -euo pipefail
 
 # ------------------------------------------------------------------------------
-# factory_reset.sh
-# - Brutal, deterministic reset for cluster dev.
-# - Only touches project-owned data directories + business DB.
-# - Then re-runs ensure_pg.sh + ensure_kafka.sh to re-bootstrap infra.
+# scripts/cluster/factory_reset.sh
 #
-# It assumes ensure_kafka.sh pins log.dirs into:
-#   $ROOT_DIR/data/kafka/logs  (project-owned)
-# and project config:
-#   $ROOT_DIR/data/kafka/server.properties
+# cluster-aware brutal reset:
+# - kill app processes on all nodes
+# - stop kafka on kafka node
+# - for FULL_RESET=1/2 also stop pg on pg node
+# - FULL_RESET=0:
+#     reset kafka project storage + drop PG business DB
+# - FULL_RESET=1/2:
+#     wipe each node's $ROOT_DIR/data
+# - finally re-bootstrap pg + kafka
+#
+# FULL_RESET modes:
+#   0 / unset : no full data wipe
+#   1         : wipe each node's $ROOT_DIR/data except mockchain.db
+#   2         : wipe each node's $ROOT_DIR/data entirely
 # ------------------------------------------------------------------------------
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/scripts/lib/_bootstrap.sh"
 bootstrap cluster
 
-ts() { date '+%F %T'; }
+source "$ROOT_DIR/scripts/cluster/lib/_cluster_ctl.sh"
+
+ts()  { date '+%F %T'; }
 log() { echo "[$(ts)] [factory_reset] $*"; }
+die() { echo "[$(ts)] [factory_reset] ERROR: $*" >&2; exit 1; }
 
-pid_alive() { kill -0 "$1" >/dev/null 2>&1; }
+run_remote_cluster_primitive() {
+  local node="$1"
+  local script_rel="$2"
+  shift 2 || true
 
-kill_pid_soft_hard() {
-  local pid="$1"
-  [[ -z "$pid" ]] && return 0
-  if ! pid_alive "$pid"; then
-    return 0
-  fi
-  kill -TERM "$pid" >/dev/null 2>&1 || true
-  sleep 0.2
-  pid_alive "$pid" && kill -KILL "$pid" >/dev/null 2>&1 || true
-}
+  local root cmd
+  root="$(root_of_node "$node")"
 
-kafka_stop_by_pidfile() {
-  # stop tailer first (avoid holding file handles)
-  if [[ -f "$KAFKA_TAIL_PID_FILE" ]]; then
-    local tpid
-    tpid="$(cat "$KAFKA_TAIL_PID_FILE" 2>/dev/null || true)"
-    [[ -n "$tpid" ]] && kill_pid_soft_hard "$tpid"
-    rm -f "$KAFKA_TAIL_PID_FILE" || true
+  cmd="cd $(printf '%q' "$root") && bash $(printf '%q' "$script_rel")"
+  if (($# > 0)); then
+    local arg
+    for arg in "$@"; do
+      cmd+=" $(printf '%q' "$arg")"
+    done
   fi
 
-  if [[ -f "$KAFKA_PID_FILE" ]]; then
-    local kpid
-    kpid="$(cat "$KAFKA_PID_FILE" 2>/dev/null || true)"
-    [[ -n "$kpid" ]] && kill_pid_soft_hard "$kpid"
-    rm -f "$KAFKA_PID_FILE" || true
-  fi
-}
-
-kafka_stop_fallback() {
-  # Fallback: match Kafka Java processes (version-dependent class names)
-  pkill -TERM -f 'kafka\.Kafka|KafkaRaftServer|QuorumController' 2>/dev/null || true
-  sleep 0.5
-  pkill -KILL -f 'kafka\.Kafka|KafkaRaftServer|QuorumController' 2>/dev/null || true
-
-  # Also kill kafka-server-start.sh wrapper if any
-  pkill -TERM -f 'kafka-server-start\.sh' 2>/dev/null || true
-  sleep 0.2
-  pkill -KILL -f 'kafka-server-start\.sh' 2>/dev/null || true
-}
-
-rm_kafka_project_storage() {
-  # Only delete project-owned kafka storage/logs/local.
-  if [[ -d "$KAFKA_PROJECT_DIR" ]]; then
-    log "Removing Kafka project dir: $KAFKA_PROJECT_DIR"
-    rm -rf "$KAFKA_PROJECT_DIR"
-  fi
-
-  # Ensure no stale logs in shared log dir
-  rm -f "$LOG_DIR"/kafka.*.log "$LOG_DIR"/kafka.latest.log 2>/dev/null || true
-}
-
-pg_reset_business_db() {
-  if ! command -v psql >/dev/null 2>&1; then
-    log "psql not found; skipping PG reset."
-    return 0
-  fi
-
-  log "Dropping Postgres DB: ${PG_DB}"
-    psql -v ON_ERROR_STOP=1 -h "$PG_HOST" -p "$PG_PORT" -d postgres <<SQL
-SELECT pg_terminate_backend(pid)
-FROM pg_stat_activity
-WHERE datname='${PG_DB}'
-  AND pid <> pg_backend_pid();
-
-DROP DATABASE IF EXISTS "${PG_DB}";
-SQL
+  log "run remote primitive: node=$node script=$script_rel args=($*)"
+  ssh_bash "$node" "$cmd"
 }
 
 main() {
-  log "Killing app processes..."
-  pkill -9 -f "$APP_KILL_RE" 2>/dev/null || true
+  cctl_require_cmds
 
-  log "Stopping Kafka (pidfile first)..."
-  kafka_stop_by_pidfile
-  log "Stopping Kafka (fallback scan)..."
-  kafka_stop_fallback
+  local kafka_node pg_node full_reset node
+  kafka_node="$(node_of_service kafka)"
+  pg_node="$(node_of_service pg)"
+  full_reset="${FULL_RESET:-0}"
 
-  log "Reset Kafka project-owned storage..."
-  rm_kafka_project_storage
+  log "cluster factory reset begin"
+  log "kafka node=$kafka_node pg node=$pg_node FULL_RESET=$full_reset"
 
-  log "Reset Postgres business DB..."
-  pg_reset_business_db
+  log "phase 1: kill app processes on all nodes"
+  while read -r node; do
+    [[ -z "$node" ]] && continue
+    if remote_project_exists "$node"; then
+      run_remote_cluster_primitive "$node" "scripts/cluster/kill_apps.sh"
+    else
+      log "skip node=$node, project root missing"
+    fi
+  done < <(reset_nodes)
 
-  log "Re-bootstrap Postgres (ensure_pg.sh)..."
-  "$ROOT_DIR/scripts/local/ensure_pg.sh"
+  log "phase 2: stop infra"
+  if remote_project_exists "$kafka_node"; then
+    run_remote_cluster_primitive "$kafka_node" "scripts/cluster/stop_kafka.sh"
+  else
+    log "skip kafka stop: node=$kafka_node project root missing"
+  fi
 
-  log "Re-bootstrap Kafka (ensure_kafka.sh)..."
-
-  "$ROOT_DIR/scripts/local/ensure_kafka.sh"
-
-  case "${FULL_RESET:-0}" in
-    2)
-      log "FULL_RESET=2, nuking entire $ROOT_DIR/data"
-      rm -rf "$ROOT_DIR/data"
-      mkdir -p "$ROOT_DIR/data"
-      ;;
-    1)
-      log "FULL_RESET=1, wiping $ROOT_DIR/data except mockchain.db"
-
-      # 先确保 data 存在
-      mkdir -p "$ROOT_DIR/data"
-
-      # 删除 data 下除 mockchain.db 之外的所有内容
-      find "$ROOT_DIR/data" -mindepth 1 -maxdepth 1 \
-        ! -path "$ROOT_DIR/data/mockchain.db" \
-        -exec rm -rf {} +
-
+  case "$full_reset" in
+    1|2)
+      if remote_project_exists "$pg_node"; then
+        run_remote_cluster_primitive "$pg_node" "scripts/cluster/stop_pg.sh"
+      else
+        log "skip pg stop: node=$pg_node project root missing"
+      fi
       ;;
     *)
-      log "FULL_RESET disabled; skipping full data wipe"
+      :
       ;;
   esac
+
+  log "phase 3: reset data"
+  case "$full_reset" in
+    2|1)
+      while read -r node; do
+        [[ -z "$node" ]] && continue
+        if remote_project_exists "$node"; then
+          run_remote_cluster_primitive "$node" "scripts/cluster/reset_node_data.sh" "$full_reset"
+        else
+          log "skip node=$node, project root missing"
+        fi
+      done < <(reset_nodes)
+      ;;
+    0|"")
+      if remote_project_exists "$kafka_node"; then
+        run_remote_cluster_primitive "$kafka_node" "scripts/cluster/reset_kafka_storage.sh"
+      else
+        log "skip kafka storage reset: node=$kafka_node project root missing"
+      fi
+
+      if remote_project_exists "$pg_node"; then
+        run_remote_cluster_primitive "$pg_node" "scripts/cluster/drop_pg_db.sh"
+      else
+        log "skip pg db drop: node=$pg_node project root missing"
+      fi
+      ;;
+    *)
+      die "FULL_RESET must be one of: 0|1|2"
+      ;;
+  esac
+
+  log "phase 4: re-bootstrap infra"
+  if remote_project_exists "$pg_node"; then
+    run_remote_script_rel "$pg_node" "scripts/cluster/ensure_pg.sh"
+  else
+    log "skip ensure_pg: node=$pg_node project root missing"
+  fi
+
+  if remote_project_exists "$kafka_node"; then
+    run_remote_script_rel "$kafka_node" "scripts/cluster/ensure_kafka.sh"
+  else
+    log "skip ensure_kafka: node=$kafka_node project root missing"
+  fi
 
   log "Done."
 }
 
 main "$@"
-#FULL_RESET=1 ./scripts/local/factory_reset.sh
+
+# examples:
+#   bash scripts/cluster/factory_reset.sh
+#   FULL_RESET=1 bash scripts/cluster/factory_reset.sh
+#   FULL_RESET=2 bash scripts/cluster/factory_reset.sh
