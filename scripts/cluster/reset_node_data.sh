@@ -46,7 +46,9 @@ main() {
       log "FULL_RESET=1, wiping $data_dir except mockchain.db"
       mkdir -p "$data_dir"
       find "$data_dir" -mindepth 1 -maxdepth 1 \
-        ! -path "$data_dir/mockchain.db" \
+        ! -path "$MOCK_DB" \
+        ! -path "$PID_DIR" \
+        ! -path "$ERR_DIR" \
         -exec rm -rf {} +
       ;;
     *)

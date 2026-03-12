@@ -105,27 +105,29 @@ main() {
   pg_reset_business_db
 
   log "Re-bootstrap Postgres (ensure_pg.sh)..."
-  "$ROOT_DIR/scripts/local/ensure_pg.sh"
+  "$CUR_MODE_SCRIPTS/ensure_pg.sh"
 
   log "Re-bootstrap Kafka (ensure_kafka.sh)..."
 
-  "$ROOT_DIR/scripts/local/ensure_kafka.sh"
+  "$CUR_MODE_SCRIPTS/ensure_kafka.sh"
 
   case "${FULL_RESET:-0}" in
     2)
-      log "FULL_RESET=2, nuking entire $ROOT_DIR/data"
-      rm -rf "$ROOT_DIR/data"
-      mkdir -p "$ROOT_DIR/data"
+      log "FULL_RESET=2, nuking entire $DATA_DIR"
+      rm -rf "$DATA_DIR"
+      mkdir -p "$DATA_DIR"
       ;;
     1)
-      log "FULL_RESET=1, wiping $ROOT_DIR/data except mockchain.db"
+      log "FULL_RESET=1, wiping $DATA_DIR except mockchain.db"
 
       # 先确保 data 存在
-      mkdir -p "$ROOT_DIR/data"
+      mkdir -p "$DATA_DIR"
 
-      # 删除 data 下除 mockchain.db 之外的所有内容
-      find "$ROOT_DIR/data" -mindepth 1 -maxdepth 1 \
-        ! -path "$ROOT_DIR/data/mockchain.db" \
+      # 删除 data 下除 mockchain.db和pid 之外的所有内容
+      find "$DATA_DIR" -mindepth 1 -maxdepth 1 \
+        ! -path "$MOCK_DB" \
+        ! -path "$PID_DIR" \
+        ! -path "$ERR_DIR" \
         -exec rm -rf {} +
 
       ;;

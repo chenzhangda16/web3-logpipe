@@ -11,10 +11,8 @@ set -euo pipefail
 # - Avoid colliding with system postgres (default port uses 55432, not 5432)
 # - Refuse to operate if connected cluster's data_directory != expected PGDATA
 # ------------------------------------------------------------------------------
-if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
-  source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/scripts/lib/_bootstrap.sh"
-  bootstrap local
-fi
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/scripts/lib/_bootstrap.sh"
+bootstrap local
 
 pglog() { echo "[$(date '+%F %T')] [ensure_pg] $*"; }
 warn()  { echo "[$(date '+%F %T')] [ensure_pg] WARN: $*" >&2; }
@@ -107,7 +105,7 @@ ensure_pg_hba() {
 
 ensure_inited() {
   have_cmd initdb || die "initdb not found. Install postgresql server utilities."
-  mkdir -p "$PGDATA" "$PG_LOG_DIR"
+  mkdir -p "$PGDATA" "$LOG_DIR"
 
   if [[ -s "$PGDATA/PG_VERSION" ]]; then
     return 0
@@ -150,8 +148,8 @@ start_pg() {
 
   local ts_full latest hist tail_pid_file
   ts_full="$(date '+%Y%m%d_%H%M%S')"
-  latest="$PG_LOG_DIR/postgres.latest.log"
-  hist="$PG_LOG_DIR/postgres.$ts_full.log"
+  latest="$LOG_DIR/postgres.latest.log"
+  hist="$LOG_DIR/postgres.$ts_full.log"
   tail_pid_file="$PID_DIR/postgres_tail.pid"
 
   if [[ -f "$PGDATA/postmaster.pid" ]]; then
@@ -254,7 +252,7 @@ else
   ensure_expected_cluster
 fi
 
-pg_wait_up 30 || die "Postgres still not reachable at ${PG_HOST}:${PG_PORT}. Check logs under: $PG_LOG_DIR"
+pg_wait_up 30 || die "Postgres still not reachable at ${PG_HOST}:${PG_PORT}. Check logs under: $LOG_DIR"
 
 pglog "Postgres reachable and cluster verified"
 ensure_role

@@ -25,8 +25,6 @@ set -euo pipefail
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/scripts/lib/_bootstrap.sh"
 bootstrap cluster
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-
 clog() { echo "[$(date '+%F %T')] [cluster] $*"; }
 die()  { echo "[$(date '+%F %T')] [cluster] ERROR: $*" >&2; exit 1; }
 
@@ -206,11 +204,6 @@ run_service_ensure() {
 # log mirror helpers
 # ------------------------------------------------------------------------------
 
-TAIL_PID_DIR="$ROOT_DIR/tmp/cluster-tail/pids"
-TAIL_ERR_DIR="$ROOT_DIR/tmp/cluster-tail/stderr"
-
-mkdir -p "$TAIL_PID_DIR" "$TAIL_ERR_DIR"
-
 normalize_relpath() {
   local p="$1"
   [[ -n "$p" ]] || die "empty path"
@@ -229,9 +222,6 @@ abs_to_rel_under_root() {
   local root="$2"
 
   case "$abs" in
-    "$root")
-      printf '.'
-      ;;
     "$root"/*)
       printf '%s' "${abs#"$root"/}"
       ;;
@@ -290,14 +280,14 @@ pid_file_of_rel() {
   local rel="$1"
   local key
   key="$(printf '%s' "$rel" | sed 's#[^A-Za-z0-9._-]#_#g')"
-  printf '%s/%s.pid' "$TAIL_PID_DIR" "$key"
+  printf '%s/%s.pid' "$PID_DIR" "$key"
 }
 
 stderr_file_of_rel() {
   local rel="$1"
   local key
   key="$(printf '%s' "$rel" | sed 's#[^A-Za-z0-9._-]#_#g')"
-  printf '%s/%s.err.log' "$TAIL_ERR_DIR" "$key"
+  printf '%s/%s.err.log' "$ERR_DIR" "$key"
 }
 
 remote_file_exists() {
@@ -369,7 +359,6 @@ logs_start() {
   fi
 
   node="$(node_of_relpath "$rel")"
-  host="$(host_alias_of_node "$node")"
   remote_abs="$(remote_abs_of_rel "$node" "$rel")"
 
   if ! remote_file_exists "$node" "$remote_abs"; then
@@ -380,9 +369,9 @@ logs_start() {
   local_abs="$(local_abs_of_rel "$rel")"
   mkdir -p "$(dirname "$local_abs")"
 
-  clog "logs-start: node=$node host=$host rel=$rel -> local=$local_abs"
+  clog "logs-start: node=$node rel=$rel -> local=$local_abs"
 
-  nohup ssh "$host" "tail -F $(printf '%q' "$remote_abs")" \
+  nohup ssh "$node" "tail -F $(printf '%q' "$remote_abs")" \
     >> "$local_abs" 2>> "$err_file" &
   pid=$!
 

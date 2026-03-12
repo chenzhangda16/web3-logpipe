@@ -120,7 +120,7 @@ ensure_pg_hba() {
 
 ensure_inited() {
   have_cmd initdb || die "initdb not found. Install postgresql server utilities."
-  mkdir -p "$PGDATA" "$PG_LOG_DIR"
+  mkdir -p "$PGDATA" "$LOG_DIR"
 
   if [[ -s "$PGDATA/PG_VERSION" ]]; then
     return 0
@@ -163,11 +163,11 @@ start_pg() {
 
   local ts_full latest hist tail_pid_file
   ts_full="$(date '+%Y%m%d_%H%M%S')"
-  latest="$PG_LOG_DIR/postgres.latest.log"
-  hist="$PG_LOG_DIR/postgres.$ts_full.log"
+  latest="$LOG_DIR/postgres.latest.log"
+  hist="$LOG_DIR/postgres.$ts_full.log"
   tail_pid_file="$PID_DIR/postgres_tail.pid"
 
-  mkdir -p "$PG_LOG_DIR" "$PID_DIR"
+  mkdir -p "$LOG_DIR" "$PID_DIR"
 
   if [[ -f "$PGDATA/postmaster.pid" ]]; then
     local pid
@@ -269,7 +269,7 @@ ensure_pg_main() {
     ensure_expected_cluster
   fi
 
-  pg_wait_up 30 || die "Postgres still not reachable at ${PG_HOST}:${PG_PORT}. Check logs under: $PG_LOG_DIR"
+  pg_wait_up 30 || die "Postgres still not reachable at ${PG_HOST}:${PG_PORT}. Check logs under: $LOG_DIR"
 
   pglog "Postgres reachable and cluster verified"
   ensure_role

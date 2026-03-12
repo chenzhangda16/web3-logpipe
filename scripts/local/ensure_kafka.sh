@@ -20,10 +20,8 @@ set -euo pipefail
 #   KAFKA_HOME=/opt/kafka_2.13-3.8.0
 #   KAFKA_CONFIG=$KAFKA_HOME/config/kraft/server.properties
 # ------------------------------------------------------------------------------
-if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
-  source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/scripts/lib/_bootstrap.sh"
-  bootstrap local
-fi
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/scripts/lib/_bootstrap.sh"
+bootstrap local
 
 # ----------------------------- tiny logger ------------------------------------
 ts() { date '+%H:%M:%S'; }

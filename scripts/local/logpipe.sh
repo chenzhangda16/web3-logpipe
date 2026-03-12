@@ -351,8 +351,8 @@ start() {
   # auto cleanup whatever has already been started.
   trap 'cleanup_start; exit 1' ERR INT TERM
 
-  source ./scripts/local/ensure_pg.sh
-  source ./scripts/local/ensure_kafka.sh
+  ./scripts/local/ensure_pg.sh
+  ./scripts/local/ensure_kafka.sh
 
   need_cmd curl
   build_bins
