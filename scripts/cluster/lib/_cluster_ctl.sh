@@ -64,6 +64,7 @@ root_of_node() {
   local var="ROOT_${node^^}"
   local val
   val="$(cluster_ctl_getvar "$var")"
+  echo "dir: val"
   [[ -n "$val" ]] || {
     cluster_ctl_die "env var not found: $var"
     return 1
@@ -97,7 +98,7 @@ log_dir_of_node() {
 
 node_of_service() {
   local svc="$1"
-  local var="HOST_${svc^^}"
+  local var="${svc^^}_HOST"
   local val
   val="$(cluster_ctl_getvar "$var")"
   [[ -n "$val" ]] || {
@@ -114,6 +115,12 @@ node_of_service() {
 ssh_node() {
   local node="$1"
   shift
+
+  if node_is_local "$node"; then
+    "$@"
+    return
+  fi
+
   local host
   host="$(host_alias_of_node "$node")"
   ssh "$host" "$@"
@@ -122,6 +129,12 @@ ssh_node() {
 ssh_bash() {
   local node="$1"
   local cmd="$2"
+
+  if node_is_local "$node"; then
+    run_local_bash "$cmd"
+    return
+  fi
+
   local host
   host="$(host_alias_of_node "$node")"
   ssh "$host" "bash -lc $(printf '%q' "$cmd")"
@@ -131,6 +144,12 @@ remote_project_exists() {
   local node="$1"
   local root
   root="$(root_of_node "$node")" || return 1
+
+  if node_is_local "$node"; then
+    [[ -d "$root" ]]
+    return
+  fi
+
   ssh_bash "$node" "[[ -d $(printf '%q' "$root") ]]"
 }
 
@@ -138,7 +157,14 @@ ensure_remote_root() {
   local node="$1"
   local root
   root="$(root_of_node "$node")" || return 1
-  cluster_ctl_log "ensure remote root: node=$node root=$root"
+
+  cluster_ctl_log "ensure root: node=$node root=$root"
+
+  if node_is_local "$node"; then
+    mkdir -p "$root"
+    return
+  fi
+
   ssh_bash "$node" "mkdir -p $(printf '%q' "$root")"
 }
 
@@ -152,7 +178,7 @@ sync_node() {
   ensure_remote_root "$node" || return 1
 
   cluster_ctl_log "sync repo: node=$node host=$host root=$root"
-
+  echo "start rsync"
   rsync -az --delete \
     --exclude '.git' \
     --exclude 'data' \
@@ -163,6 +189,7 @@ sync_node() {
     --exclude 'node_modules' \
     --exclude 'vendor' \
     "$ROOT_DIR/" "$host:$root/"
+  echo "rsync done"
 }
 
 sync_all_nodes() {
@@ -181,6 +208,23 @@ run_remote_script_rel() {
   root="$(root_of_node "$node")" || return 1
 
   cluster_ctl_log "run remote script: node=$node script=$script_rel"
+  ssh_bash "$node" "cd $(printf '%q' "$root") && bash $(printf '%q' "$script_rel")"
+}
+
+run_remote_script_rel() {
+  local node="$1"
+  local script_rel="$2"
+  local root
+
+  root="$(root_of_node "$node")" || return 1
+
+  cluster_ctl_log "run script: node=$node script=$script_rel"
+
+  if node_is_local "$node"; then
+    cd "$root" && bash "$script_rel"
+    return
+  fi
+
   ssh_bash "$node" "cd $(printf '%q' "$root") && bash $(printf '%q' "$script_rel")"
 }
 
@@ -232,7 +276,7 @@ cluster_sync_mark_done_in_shell() {
 
 cluster_sync_once() {
   if cluster_sync_is_done_in_shell; then
-    cluster_ctl_log "cluster sync already done in this shell; skip"
+    cluster_ctl_log "cluster sync already done in this shell once; skip"
     return 0
   fi
 
@@ -246,7 +290,7 @@ cluster_sync_once() {
 
 cluster_sync_ensure() {
   if cluster_sync_is_done_in_shell; then
-    cluster_ctl_log "cluster sync already done in this shell; skip"
+    cluster_ctl_log "ensure cluster sync already done in this shell; skip"
     return 0
   fi
 
@@ -260,21 +304,57 @@ cluster_sync_ensure() {
   cluster_sync_once
 }
 
+# ------------------------------------------------------------------------------
+# infra ensure bundle
+# ------------------------------------------------------------------------------
+
+cluster_ensure_pg() {
+  local node
+  node="$(node_of_service pg)" || return 1
+  run_remote_script_rel "$node" "scripts/cluster/ensure_pg.sh"
+}
+
+cluster_ensure_kafka() {
+  local node
+  node="$(node_of_service kafka)" || return 1
+  run_remote_script_rel "$node" "scripts/cluster/ensure_kafka.sh"
+}
+
+cluster_ensure_infra() {
+  cluster_sync_ensure || return 1
+
+  # 先 pg 后 kafka，保持现有时序
+  cluster_ensure_pg || return 1
+  cluster_ensure_kafka || return 1
+
+  cluster_ctl_log "cluster infra ensured"
+}
+
+# ------------------------------------------------------------------------------
+# infra ensure bundle
+# ------------------------------------------------------------------------------
+
 deploy_file_to_node() {
   local local_file="$1"
   local node="$2"
   local remote_file="$3"
 
-  local host remote_dir
   [[ -f "$local_file" ]] || {
     cluster_ctl_die "local file not found: $local_file"
     return 1
   }
 
+  cluster_ctl_log "deploy file: $local_file -> $node:$remote_file"
+
+  if node_is_local "$node"; then
+    mkdir -p "$(dirname "$remote_file")" || return 1
+    cp -f "$local_file" "$remote_file" || return 1
+    return 0
+  fi
+
+  local host remote_dir
   host="$(host_alias_of_node "$node")"
   remote_dir="$(dirname "$remote_file")"
-
-  cluster_ctl_log "deploy file: $local_file -> $node:$remote_file"
 
   ssh_bash "$node" "mkdir -p $(printf '%q' "$remote_dir")" || return 1
   rsync -az "$local_file" "$host:$remote_file" || return 1
@@ -320,4 +400,14 @@ deploy_writer_binary() {
   ssh_bash "$node" "chmod +x $(printf '%q' "$remote_bin")" || return 1
 
   cluster_ctl_log "writer binary deployed: node=$node artifact=$artifact remote=$remote_bin"
+}
+
+node_is_local() {
+  local node="$1"
+  [[ "$node" == "$(controller_node)" ]]
+}
+
+run_local_bash() {
+  local cmd="$1"
+  bash -lc "$cmd"
 }

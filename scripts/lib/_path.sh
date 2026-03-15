@@ -5,7 +5,7 @@ get_root_dir() {
   cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd
 }
 
-load_path_stack() {
+load_base_path_stack() {
   local mode="${1:?mode required}"  # local | cluster
 
   ROOT_DIR="$(get_root_dir)"
@@ -44,42 +44,9 @@ load_path_stack() {
   export PGDATA
   export KAFKA_PROJECT_DIR KAFKA_PROJECT_LOG_DIR KAFKA_PROJECT_CONFIG
   export PID_FILE KAFKA_PID_FILE KAFKA_TAIL_PID_FILE
-
-  [[ $mode == local ]] && return 0
-
-  local node svc root arch
-
-  for node in "${!NODE_ROOT[@]}"; do
-    root="${NODE_ROOT[$node]}"
-    arch="${NODE_ARCH[$node]}"
-    printf -v "ROOT_${node}" '%s' "$root"
-    printf -v "BIN_DIR_${node}" '%s/bin/%s' "$root" "$arch"
-    printf -v "LOG_DIR_${node}" '%s/logs' "$root"
-    export "ROOT_${node}" "BIN_DIR_${node}" "LOG_DIR_${node}"
-    echo "ROOT_${node}" "BIN_DIR_${node}" "LOG_DIR_${node}"
-  done
-
-  for svc in "${!SERVICE_NODE[@]}"; do
-    node="${SERVICE_NODE[$svc]}"
-    root="${NODE_ROOT[$node]}"
-    arch="${NODE_ARCH[$node]}"
-    printf -v "${svc}_HOST" '%s' "${NODE_HOST[$node]}"
-    printf -v "${svc}_IP" '%s' "${NODE_IP[$node]}"
-    printf -v "${svc}_ROOT" '%s' "$root"
-    printf -v "${svc}_BIN_DIR" '%s/bin/%s' "$root" "$arch"
-    printf -v "${svc}_LOG_DIR" '%s/logs' "$root" # 这个东西用不用得上是存疑的
-    export "${svc}_HOST" "${svc}_IP" "${svc}_ROOT" "${svc}_BIN_DIR" "${svc}_LOG_DIR"
-  done
-
-  for svc in "${!SERVICE_PORT[@]}"; do
-    printf -v "${svc}_PORT" '%s' "${SERVICE_PORT[$svc]}"
-    export "${svc}_PORT"
-  done
-
-  export MOCK_RPC_HOST="$MOCKCHAIN_HOST" MOCK_RPC_IP="$MOCKCHAIN_IP"
 }
 
-ensure_path_stack() {
+ensure_base_path_stack() {
   : "${ROOT_DIR:?ROOT_DIR not set}"
   : "${DATA_DIR:?DATA_DIR not set}"
   : "${LOG_DIR:?LOG_DIR not set}"

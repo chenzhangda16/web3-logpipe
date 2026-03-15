@@ -7,7 +7,6 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
   exit 1
 fi
 
-# Guard: source library body only once per shell/process.
 if [[ -n "${__WEB3_LOGPIPE_BOOTSTRAP_LIB_SOURCED:-}" ]]; then
   return 0 2>/dev/null || exit 0
 fi
@@ -16,27 +15,23 @@ __WEB3_LOGPIPE_BOOTSTRAP_LIB_SOURCED=1
 bootstrap() {
   local mode="${1:?usage: bootstrap <mode>}"
 
-  # mode 一旦确定，不允许同一 shell 混用
   if [[ -n "${BOOTSTRAP_MODE:-}" && "${BOOTSTRAP_MODE}" != "$mode" ]]; then
     printf '%s\n' "bootstrap mode conflict: existing=${BOOTSTRAP_MODE} requested=$mode" >&2
     return 1
   fi
-
   export BOOTSTRAP_MODE="$mode"
 
-  source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/_path.sh"
-  load_path_stack "$mode"
-  ensure_path_stack
+  local lib_dir
+  lib_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+  source "$lib_dir/_path.sh"
+  load_base_path_stack "$mode"
 
   source "$SCRIPTS_DIR/lib/_env.sh"
+  load_raw_env_stack "$mode"
+  load_topology_stack "$mode"
+  load_runtime_env_stack
 
-  # 环境按 mode 做一次性幂等；路径与目录则每次都修复
-  local env_flag_var="__WEB3_LOGPIPE_ENV_LOADED_${mode^^}"
-  if [[ -z "${!env_flag_var:-}" ]]; then
-    load_env_stack "$mode"
-    printf -v "$env_flag_var" '%s' 1
-    export "$env_flag_var"
-  fi
-
+  ensure_base_path_stack
   cd "$ROOT_DIR"
 }

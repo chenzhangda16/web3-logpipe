@@ -39,46 +39,6 @@ build_writer_cross() {
   bash "$ROOT_DIR/scripts/cluster/build_writer_cross.sh"
 }
 
-writer_remote_platform() {
-  # 可按需在 env 里覆盖：WRITER_REMOTE_PLATFORM=linux_arm64
-  printf '%s' "${WRITER_REMOTE_PLATFORM:-android_arm64}"
-}
-
-writer_cross_artifact() {
-  local platform
-  platform="$(writer_remote_platform)"
-
-  case "$platform" in
-    android_arm64)
-      printf '%s/bin/out/writer.android.arm64' "$ROOT_DIR"
-      ;;
-    linux_arm64)
-      printf '%s/bin/out/writer.linux.arm64' "$ROOT_DIR"
-      ;;
-    *)
-      die "unsupported WRITER_REMOTE_PLATFORM=$platform"
-      ;;
-  esac
-}
-
-deploy_writer_binary() {
-  local node artifact host root remote_bin
-  node="$(service_node writer)"
-  artifact="$(writer_cross_artifact)"
-  host="$(host_alias_of_node "$node")"
-  root="$(root_of_node "$node")"
-  remote_bin="$root/bin/writer"
-
-  [[ -f "$artifact" ]] || die "writer artifact not found: $artifact"
-
-  log "deploying writer binary: $artifact -> $node:$remote_bin"
-  ssh_bash "$node" "mkdir -p $(printf '%q' "$root/bin")"
-  rsync -az "$artifact" "$host:$remote_bin"
-  ssh_bash "$node" "chmod +x $(printf '%q' "$remote_bin")"
-
-  log "writer binary deployed to $node"
-}
-
 wait_http_ok() {
   local url="$1"
   local timeout_sec="${2:-30}"
@@ -102,16 +62,31 @@ wait_remote_ready_fifo() {
   local fifo="$2"
   local timeout_sec="${3:-30}"
 
-  local inner
-  inner="read -r _ < $(printf '%q' "$fifo")"
+  local spid start now
 
-  ssh_bash "$node" "
-if command -v timeout >/dev/null 2>&1; then
-  timeout ${timeout_sec}s bash -lc $(printf '%q' "$inner")
-else
-  bash -lc $(printf '%q' "$inner")
-fi
-"
+  if node_is_local "$node"; then
+    bash -lc "read -r _ < $(printf '%q' "$fifo")" &
+  else
+    ssh_bash "$node" "read -r _ < $(printf '%q' "$fifo")" &
+  fi
+  spid=$!
+
+  start="$(date +%s)"
+  while true; do
+    if ! kill -0 "$spid" >/dev/null 2>&1; then
+      wait "$spid"
+      return 0
+    fi
+
+    now="$(date +%s)"
+    if (( now - start >= timeout_sec )); then
+      kill "$spid" >/dev/null 2>&1 || true
+      wait "$spid" 2>/dev/null || true
+      die "timeout waiting for ready fifo: node=$node fifo=$fifo"
+    fi
+
+    sleep 0.2
+  done
 }
 
 is_pid_alive() {
@@ -253,11 +228,9 @@ start_remote_stream() {
   local script_rel="$1"; shift
 
   local latest_log="$LOG_DIR/${prefix}.latest.log"
-  local host root remote_cmd pid arg
+  local root remote_cmd pid arg
 
   : > "$latest_log"
-
-  host="$(host_alias_of_node "$node")"
   root="$(root_of_node "$node")"
 
   remote_cmd="cd $(printf '%q' "$root") && bash $(printf '%q' "$script_rel")"
@@ -265,7 +238,13 @@ start_remote_stream() {
     remote_cmd+=" $(printf '%q' "$arg")"
   done
 
-  nohup ssh "$host" "bash -lc $(printf '%q' "$remote_cmd")" >> "$latest_log" 2>&1 &
+  if node_is_local "$node"; then
+    nohup bash -lc "$remote_cmd" >> "$latest_log" 2>&1 &
+  else
+    local host
+    host="$(host_alias_of_node "$node")"
+    nohup ssh "$host" "bash -lc $(printf '%q' "$remote_cmd")" >> "$latest_log" 2>&1 &
+  fi
   pid=$!
 
   printf -v "$__outvar" '%s' "$pid"
