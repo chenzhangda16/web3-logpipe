@@ -106,7 +106,7 @@ ensure_project_config() {
 
     # hard pin dev listeners to avoid adb / host conflicts
     echo "listeners=PLAINTEXT://:19092,CONTROLLER://:19093"
-    echo "advertised.listeners=PLAINTEXT://$KAFKA_HOST:19092"
+    echo "advertised.listeners=PLAINTEXT://$KAFKA_IP:19092"
     echo "inter.broker.listener.name=PLAINTEXT"
     echo "controller.listener.names=CONTROLLER"
     echo "controller.quorum.voters=1@localhost:19093"

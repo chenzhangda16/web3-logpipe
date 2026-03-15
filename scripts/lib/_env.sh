@@ -27,15 +27,15 @@ load_env_stack() {
   PG_DB_OWNER="${PG_DB_OWNER:-$PG_USER}" # unused
   PG_SUPERUSER="${PG_SUPERUSER:-$(id -un)}"
 
-  PG_DSN="${PG_DSN:-postgres://${PG_USER}:${PG_PASS}@${PG_HOST}:${PG_PORT}/${PG_DB}?sslmode=disable}"
-  PG_ADMIN_DSN="${PG_ADMIN_DSN:-postgres://${PG_SUPERUSER}@${PG_HOST}:${PG_PORT}/postgres?sslmode=disable}" # unused
+  PG_DSN="${PG_DSN:-postgres://${PG_USER}:${PG_PASS}@${PG_IP}:${PG_PORT}/${PG_DB}?sslmode=disable}"
+  PG_ADMIN_DSN="${PG_ADMIN_DSN:-postgres://${PG_SUPERUSER}@${PG_IP}:${PG_PORT}/postgres?sslmode=disable}" # unused
 
   # mock / rpc
-  MOCK_RPC="${MOCK_RPC_HOST}:${MOCK_RPC_PORT}"
+  MOCK_RPC="${MOCK_RPC_IP}:${MOCK_RPC_PORT}"
   RPC_BASE="${RPC_BASE:-http://${MOCK_RPC}}"
 
   # kafka
-  KAFKA_BROKERS="${KAFKA_BROKERS:-${KAFKA_HOST}:${KAFKA_PORT}}"
+  KAFKA_BROKERS="${KAFKA_BROKERS:-${KAFKA_IP}:${KAFKA_PORT}}"
 
   KAFKA_SERVER_START="${KAFKA_SERVER_START:-$KAFKA_HOME/bin/kafka-server-start.sh}"
   KAFKA_STORAGE="${KAFKA_STORAGE:-$KAFKA_HOME/bin/kafka-storage.sh}"

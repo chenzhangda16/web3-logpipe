@@ -79,7 +79,7 @@ pg_reset_business_db() {
   fi
 
   log "Dropping Postgres DB: ${PG_DB}"
-    psql -v ON_ERROR_STOP=1 -h "$PG_HOST" -p "$PG_PORT" -d postgres <<SQL
+    psql -v ON_ERROR_STOP=1 -h "$PG_IP" -p "$PG_PORT" -d postgres <<SQL
 SELECT pg_terminate_backend(pid)
 FROM pg_stat_activity
 WHERE datname='${PG_DB}'

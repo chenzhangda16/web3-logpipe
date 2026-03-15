@@ -9,10 +9,8 @@ set -euo pipefail
 # - only concerns app layer, not kafka/pg infra
 # ------------------------------------------------------------------------------
 
-if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
-  source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/scripts/lib/_bootstrap.sh"
-  bootstrap cluster
-fi
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/scripts/lib/_bootstrap.sh"
+bootstrap cluster
 
 ts()  { date '+%F %T'; }
 log() { echo "[$(ts)] [kill_apps] $*"; }

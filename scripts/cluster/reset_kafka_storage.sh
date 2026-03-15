@@ -9,10 +9,8 @@ set -euo pipefail
 # - clean project kafka logs under LOG_DIR
 # ------------------------------------------------------------------------------
 
-if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
-  source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/scripts/lib/_bootstrap.sh"
-  bootstrap cluster
-fi
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/scripts/lib/_bootstrap.sh"
+bootstrap cluster
 
 ts()  { date '+%F %T'; }
 log() { echo "[$(ts)] [reset_kafka_storage] $*"; }

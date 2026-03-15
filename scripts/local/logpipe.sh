@@ -73,7 +73,7 @@ kafka_is_up() { probe_tcp "$(kafka_host)" "$(kafka_port)"; }
 
 pg_is_up() {
   have_cmd pg_isready || return 2
-  pg_isready -h "${PG_HOST:-192.168.1.50}" -p "${PG_PORT:-55432}" >/dev/null 2>&1
+  pg_isready -h "${PG_IP:-192.168.1.50}" -p "${PG_PORT:-55432}" >/dev/null 2>&1
 }
 
 read_file_1st_line() {
@@ -233,10 +233,10 @@ status() {
   local pg_latest="$LOG_DIR/postgres.latest.log"
 
   if pg_is_up; then
-    log "postgres: OK  ${PG_HOST:-192.168.1.50}:${PG_PORT:-55432}"
+    log "postgres: OK  ${PG_IP:-192.168.1.50}:${PG_PORT:-55432}"
   else
     if have_cmd pg_isready; then
-      log "postgres: BAD ${PG_HOST:-192.168.1.50}:${PG_PORT:-55432}"
+      log "postgres: BAD ${PG_IP:-192.168.1.50}:${PG_PORT:-55432}"
     else
       log "postgres: (unknown, pg_isready not installed)"
     fi

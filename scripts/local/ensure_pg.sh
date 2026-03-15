@@ -44,7 +44,7 @@ is_pid_alive() {
 }
 
 pg_is_up() {
-  pg_isready -h "$PG_HOST" -p "$PG_PORT" >/dev/null 2>&1
+  pg_isready -h "$PG_IP" -p "$PG_PORT" >/dev/null 2>&1
 }
 
 pg_wait_up() {
@@ -62,7 +62,7 @@ pg_wait_up() {
 psql_as() {
   local db_user="$1"
   shift
-  PGPASSWORD="${PGPASSWORD:-}" psql -v ON_ERROR_STOP=1 -h "$PG_HOST" -p "$PG_PORT" -U "$db_user" -d postgres "$@"
+  PGPASSWORD="${PGPASSWORD:-}" psql -v ON_ERROR_STOP=1 -h "$PG_IP" -p "$PG_PORT" -U "$db_user" -d postgres "$@"
 }
 
 psql_super() {
@@ -119,7 +119,7 @@ ensure_inited() {
     {
       echo ""
       echo "# added by scripts/local/ensure_pg.sh"
-      echo "listen_addresses = '$PG_HOST'"
+      echo "listen_addresses = '$PG_IP'"
       echo "port = $PG_PORT"
       echo "unix_socket_directories = '$PGDATA'"
     } >> "$conf"
@@ -129,13 +129,13 @@ ensure_inited() {
 ensure_expected_cluster() {
   local actual expected
   actual="$(psql_super -Atqc "SHOW data_directory;" 2>/dev/null || true)"
-  [[ -n "$actual" ]] || die "Cannot determine connected postgres data_directory at ${PG_HOST}:${PG_PORT}"
+  [[ -n "$actual" ]] || die "Cannot determine connected postgres data_directory at ${PG_IP}:${PG_PORT}"
 
   actual="$(canonical_path "$actual")"
   expected="$(canonical_path "$PGDATA")"
 
   if [[ "$actual" != "$expected" ]]; then
-    die "Connected postgres data_directory=$actual, expected PGDATA=$expected. Wrong cluster is occupying ${PG_HOST}:${PG_PORT}"
+    die "Connected postgres data_directory=$actual, expected PGDATA=$expected. Wrong cluster is occupying ${PG_IP}:${PG_PORT}"
   fi
 }
 
@@ -179,7 +179,7 @@ start_pg() {
   : > "$latest"
   : > "$hist"
 
-  pglog "Starting postgres via pg_ctl (host=$PG_HOST port=$PG_PORT pgdata=$PGDATA superuser=$PG_SUPERUSER)"
+  pglog "Starting postgres via pg_ctl (host=$PG_IP port=$PG_PORT pgdata=$PGDATA superuser=$PG_SUPERUSER)"
   pglog "Postgres logs: latest=$latest hist=$hist"
 
   if ! pg_is_up; then
@@ -233,7 +233,7 @@ export_dsn() {
     pglog "PG_DSN already set; keep existing."
     return 0
   fi
-  export PG_DSN="postgres://${PG_USER}:${PG_PASS}@${PG_HOST}:${PG_PORT}/${PG_DB}?sslmode=disable"
+  export PG_DSN="postgres://${PG_USER}:${PG_PASS}@${PG_IP}:${PG_PORT}/${PG_DB}?sslmode=disable"
   pglog "Exported PG_DSN=$PG_DSN"
 }
 
@@ -241,7 +241,7 @@ export_dsn() {
 have_cmd pg_isready || die "pg_isready not found. Install postgresql-client."
 have_cmd psql      || die "psql not found. Install postgresql-client."
 
-pglog "Checking Postgres: ${PG_HOST}:${PG_PORT} (expected PGDATA=$PGDATA)"
+pglog "Checking Postgres: ${PG_IP}:${PG_PORT} (expected PGDATA=$PGDATA)"
 
 if pg_is_up; then
   pglog "Postgres reachable; verifying cluster identity..."
@@ -252,7 +252,7 @@ else
   ensure_expected_cluster
 fi
 
-pg_wait_up 30 || die "Postgres still not reachable at ${PG_HOST}:${PG_PORT}. Check logs under: $LOG_DIR"
+pg_wait_up 30 || die "Postgres still not reachable at ${PG_IP}:${PG_PORT}. Check logs under: $LOG_DIR"
 
 pglog "Postgres reachable and cluster verified"
 ensure_role
