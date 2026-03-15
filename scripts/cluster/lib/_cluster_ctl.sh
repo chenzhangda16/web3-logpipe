@@ -64,7 +64,6 @@ root_of_node() {
   local var="ROOT_${node^^}"
   local val
   val="$(cluster_ctl_getvar "$var")"
-  echo "dir: val"
   [[ -n "$val" ]] || {
     cluster_ctl_die "env var not found: $var"
     return 1
@@ -137,7 +136,7 @@ ssh_bash() {
 
   local host
   host="$(host_alias_of_node "$node")"
-  ssh "$host" "bash -lc $(printf '%q' "$cmd")"
+  ssh "$host" "bash -lc $(printf '%q' "$cmd")" < /dev/null
 }
 
 remote_project_exists() {
@@ -162,7 +161,7 @@ ensure_remote_root() {
 
   if node_is_local "$node"; then
     mkdir -p "$root"
-    return
+    return 0
   fi
 
   ssh_bash "$node" "mkdir -p $(printf '%q' "$root")"
@@ -170,16 +169,20 @@ ensure_remote_root() {
 
 sync_node() {
   local node="$1"
-  local host root
+  local host root rc
 
-  host="$(host_alias_of_node "$node")"
+  host="$(host_alias_of_node "$node")" || return 1
   root="$(root_of_node "$node")" || return 1
+
+  # 关键：把隐藏字符打出来
+  printf '[%s] [sync_node] host=<%q>\n' "$(ts)" "$host" >&2
+  printf '[%s] [sync_node] root=<%q>\n' "$(ts)" "$root" >&2
 
   ensure_remote_root "$node" || return 1
 
   cluster_ctl_log "sync repo: node=$node host=$host root=$root"
-  echo "start rsync"
-  rsync -az --delete \
+
+  if ! rsync -az --delete \
     --exclude '.git' \
     --exclude 'data' \
     --exclude 'logs' \
@@ -188,8 +191,12 @@ sync_node() {
     --exclude '.vscode' \
     --exclude 'node_modules' \
     --exclude 'vendor' \
-    "$ROOT_DIR/" "$host:$root/"
-  echo "rsync done"
+    "$ROOT_DIR/" "${host}:${root%/}/" < /dev/null
+  then
+    rc=$?
+    printf '[%s] [sync_node] rsync failed rc=%s host=<%q> root=<%q>\n' "$(ts)" "$rc" "$host" "$root" >&2
+    return "$rc"
+  fi
 }
 
 sync_all_nodes() {
@@ -289,18 +296,25 @@ cluster_sync_once() {
 }
 
 cluster_sync_ensure() {
+  local force="${1:-}"
+
   if cluster_sync_is_done_in_shell; then
     cluster_ctl_log "ensure cluster sync already done in this shell; skip"
     return 0
   fi
 
-  if cluster_sync_is_done_on_disk; then
+  if [[ "$force" != "force" ]] && cluster_sync_is_done_on_disk; then
     cluster_sync_mark_done_in_shell
     cluster_ctl_log "cluster sync already done on disk; skip"
     return 0
   fi
 
-  cluster_ctl_log "cluster sync done-file missing; syncing all nodes now"
+  if [[ "$force" == "force" ]]; then
+    cluster_ctl_log "cluster sync forced; syncing all nodes now"
+  else
+    cluster_ctl_log "cluster sync done-file missing; syncing all nodes now"
+  fi
+
   cluster_sync_once
 }
 
@@ -321,7 +335,9 @@ cluster_ensure_kafka() {
 }
 
 cluster_ensure_infra() {
-  cluster_sync_ensure || return 1
+  local force="${1:-}"
+
+  cluster_sync_ensure "$force" || return 1
 
   # 先 pg 后 kafka，保持现有时序
   cluster_ensure_pg || return 1

@@ -135,14 +135,14 @@ ensure_project_config() {
 }
 
 require_kafka_install() {
-  [[ -f "$KAFKA_CONFIG" ]] || die "Kafka config not found: $KAFKA_CONFIG"
   [[ -x "$KAFKA_SERVER_START" ]] || die "kafka-server-start.sh not found/executable: $KAFKA_SERVER_START"
   [[ -x "$KAFKA_STORAGE" ]] || die "kafka-storage.sh not found/executable: $KAFKA_STORAGE"
-  is_kraft_config || die "KRaft required: process.roles not found in config: $KAFKA_CONFIG"
   resolve_kafka_topics_sh
 
   ensure_project_config
-  is_kraft_config || die "KRaft required: process.roles not found in project config: $KAFKA_CONFIG"
+
+  [[ -f "$KAFKA_CONFIG" ]] || die "Kafka config not found: $KAFKA_CONFIG"
+  is_kraft_config || die "KRaft required: process.roles not found in config: $KAFKA_CONFIG"
 }
 
 # ----------------------------- kraft format logic ------------------------------

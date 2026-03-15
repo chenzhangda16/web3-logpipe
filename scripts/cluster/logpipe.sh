@@ -360,7 +360,7 @@ start() {
   need_cmd rsync
 
   build_writer_cross
-  cluster_ensure_infra
+  cluster_ensure_infra force
   deploy_writer_binary
 
   local ts_now

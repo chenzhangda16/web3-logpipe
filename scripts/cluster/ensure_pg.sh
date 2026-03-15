@@ -103,17 +103,20 @@ ensure_runtime_config() {
 
 ensure_pg_hba() {
   local hba="$PGDATA/pg_hba.conf"
+  local cidr="${PG_HBA_IPV4_CIDR:-192.168.1.0/24}"
+  local auth="${PG_HBA_AUTH_METHOD:-trust}"
   [[ -f "$hba" ]] || die "pg_hba.conf not found: $hba"
 
-  if ! grep -Fqx "host    all    all    127.0.0.1/32      trust" "$hba"; then
-    {
-      echo ""
-      echo "# added by scripts/cluster/ensure_pg.sh"
-      echo "host    all    all    127.0.0.1/32      trust"
-      echo "host    all    all    192.168.1.0/24    trust"
-      echo "host    all    all    ::1/128           trust"
-    } >> "$hba"
+  if grep -Fq "# >>> web3-logpipe cluster pg_hba begin" "$hba"; then
+    return 0
   fi
+
+  {
+    echo ""
+    echo "# >>> web3-logpipe cluster pg_hba begin"
+    echo "host    all             all             $cidr          $auth"
+    echo "# <<< web3-logpipe cluster pg_hba end"
+  } >> "$hba"
 }
 
 ensure_inited() {
@@ -125,7 +128,9 @@ ensure_inited() {
   fi
 
   pglog "Initializing PGDATA at $PGDATA (auth=$PG_INITDB_AUTH superuser=$PG_SUPERUSER)"
-  initdb -D "$PGDATA" -A "$PG_INITDB_AUTH" -U "$PG_SUPERUSER" >/dev/null
+  env -u LC_ALL -u LC_COLLATE -u LC_CTYPE -u LC_MESSAGES -u LC_MONETARY -u LC_NUMERIC -u LC_TIME \
+    LANG=en_US.UTF-8 \
+    initdb -D "$PGDATA" -A "$PG_INITDB_AUTH" -U "$PG_SUPERUSER" >/dev/null
 
   local conf="$PGDATA/postgresql.conf"
   if [[ -f "$conf" ]]; then
