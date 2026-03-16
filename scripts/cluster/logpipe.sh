@@ -25,18 +25,23 @@ bootstrap cluster
 source "$ROOT_DIR/scripts/cluster/lib/_cluster_ctl.sh"
 
 ts()  { date '+%F %T'; }
-log() { echo "[$(ts)] [logpipe] $*"; }
-die() { echo "[$(ts)] [logpipe] ERROR: $*" >&2; exit 1; }
+log() {
+  local src="${BASH_SOURCE[1]##*/}"
+  local line="${BASH_LINENO[0]}"
+  local func="${FUNCNAME[1]:-main}"
+  echo "[$(ts)] [$src:$line][$func] $*";
+}
+die() {
+  local src="${BASH_SOURCE[1]##*/}"
+  local line="${BASH_LINENO[0]}"
+  local func="${FUNCNAME[1]:-main}"
+  echo "[$(ts)] ERROR: [$src:$line][$func] $*" >&2; exit 1;
+}
 
 have_cmd() { command -v "$1" >/dev/null 2>&1; }
 
 need_cmd() {
   command -v "$1" >/dev/null 2>&1 || die "missing command: $1"
-}
-
-build_writer_cross() {
-  log "building cross writer artifacts..."
-  bash "$ROOT_DIR/scripts/cluster/build_writer_cross.sh"
 }
 
 wait_http_ok() {
@@ -126,7 +131,7 @@ read_file_1st_line() {
 
 service_node() {
   local svc="$1"
-  node_of_service "$svc"
+  host_of_service "$svc"
 }
 
 remote_ready_fifo_path() {
@@ -241,9 +246,7 @@ start_remote_stream() {
   if node_is_local "$node"; then
     nohup bash -lc "$remote_cmd" >> "$latest_log" 2>&1 &
   else
-    local host
-    host="$(host_alias_of_node "$node")"
-    nohup ssh "$host" "bash -lc $(printf '%q' "$remote_cmd")" >> "$latest_log" 2>&1 &
+    nohup ssh "$node" "bash -lc $(printf '%q' "$remote_cmd")" >> "$latest_log" 2>&1 &
   fi
   pid=$!
 
@@ -359,9 +362,7 @@ start() {
   need_cmd curl
   need_cmd rsync
 
-  build_writer_cross
   cluster_ensure_infra force
-  deploy_writer_binary
 
   local ts_now
   ts_now="$(date '+%Y%m%d_%H%M%S')"

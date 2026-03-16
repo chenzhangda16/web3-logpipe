@@ -60,7 +60,7 @@ log_rel_of_service() {
   local svc="$1"
   local node root logdir logdir_rel
 
-  node="$(node_of_service "$svc")"
+  node="$(host_of_service "$svc")"
   root="$(root_of_node "$node")"
   logdir="$(log_dir_of_node "$node")"
   logdir_rel="$(abs_to_rel_under_root "$logdir" "$root")"
@@ -163,7 +163,7 @@ node_of_relpath() {
   local svc
 
   svc="$(service_of_relpath "$rel")"
-  node_of_service "$svc"
+  host_of_service "$svc"
 }
 
 start_tail() {
@@ -196,7 +196,7 @@ start_tail() {
 
   log "start: node=$node rel=$rel -> local=$local_abs"
 
-  nohup ssh "$(host_alias_of_node "$node")" "tail -F $(printf '%q' "$remote_abs")" \
+  nohup ssh "$node" "tail -F $(printf '%q' "$remote_abs")" \
     >> "$local_abs" 2>> "$err_file" &
   pid=$!
 

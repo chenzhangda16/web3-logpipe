@@ -16,7 +16,7 @@ main() {
   [[ -n "$ready_fifo" ]] || die "usage: $0 <stamp> <ready_fifo>"
 
   cluster_component_stream_run processor "$stamp" "$ready_fifo" -- \
-    "$PROCESSOR_BIN_DIR/processor" \
+    "$PROCESSOR_CLUSTER_BIN_DIR/processor" \
       -brokers "$KAFKA_BROKERS" \
       -group "$PROC_GROUP" \
       -topic "$KAFKA_IN_TOPIC" \

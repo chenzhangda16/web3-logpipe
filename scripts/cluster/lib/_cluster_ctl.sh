@@ -13,9 +13,22 @@ if [[ -n "${__WEB3_LOGPIPE_CLUSTER_CTL_LIB_SOURCED:-}" ]]; then
 fi
 __WEB3_LOGPIPE_CLUSTER_CTL_LIB_SOURCED=1
 
-cluster_ctl_ts()  { date '+%F %T'; }
-cluster_ctl_log() { echo "[$(cluster_ctl_ts)] [cluster_ctl] $*"; }
-cluster_ctl_die() { echo "[$(cluster_ctl_ts)] [cluster_ctl] ERROR: $*" >&2; return 1; }
+cluster_ctl_ts() { date '+%F %T'; }
+
+cluster_ctl_log() {
+  local src="${BASH_SOURCE[1]##*/}"
+  local line="${BASH_LINENO[0]}"
+  local func="${FUNCNAME[1]:-main}"
+  echo "[$(cluster_ctl_ts)] [$src:$line][$func] $*"
+}
+
+cluster_ctl_die() {
+  local src="${BASH_SOURCE[1]##*/}"
+  local line="${BASH_LINENO[0]}"
+  local func="${FUNCNAME[1]:-main}"
+  echo "[$(cluster_ctl_ts)] ERROR [$src:$line][$func] $*" >&2
+  return 1
+}
 
 cluster_ctl_have_cmd() {
   command -v "$1" >/dev/null 2>&1
@@ -54,9 +67,14 @@ all_cluster_nodes() {
   deploy_nodes
 }
 
-host_alias_of_node() {
+node_is_local() {
   local node="$1"
-  printf '%s' "$node"
+  [[ "${node}" == "$(controller_node)" ]]
+}
+
+run_local_bash() {
+  local cmd="$1"
+  bash -lc "$cmd"
 }
 
 root_of_node() {
@@ -71,18 +89,6 @@ root_of_node() {
   printf '%s' "$val"
 }
 
-bin_dir_of_node() {
-  local node="$1"
-  local var="BIN_DIR_${node^^}"
-  local val
-  val="$(cluster_ctl_getvar "$var")"
-  if [[ -n "$val" ]]; then
-    printf '%s' "$val"
-  else
-    printf '%s/bin' "$(root_of_node "$node")"
-  fi
-}
-
 log_dir_of_node() {
   local node="$1"
   local var="LOG_DIR_${node^^}"
@@ -95,7 +101,7 @@ log_dir_of_node() {
   fi
 }
 
-node_of_service() {
+host_of_service() {
   local svc="$1"
   local var="${svc^^}_HOST"
   local val
@@ -121,8 +127,7 @@ ssh_node() {
   fi
 
   local host
-  host="$(host_alias_of_node "$node")"
-  ssh "$host" "$@"
+  ssh "$node" "$@"
 }
 
 ssh_bash() {
@@ -135,8 +140,7 @@ ssh_bash() {
   fi
 
   local host
-  host="$(host_alias_of_node "$node")"
-  ssh "$host" "bash -lc $(printf '%q' "$cmd")" < /dev/null
+  ssh "$node" "bash -lc $(printf '%q' "$cmd")" < /dev/null
 }
 
 remote_project_exists() {
@@ -171,19 +175,15 @@ sync_node() {
   local node="$1"
   local host root rc
 
-  host="$(host_alias_of_node "$node")" || return 1
   root="$(root_of_node "$node")" || return 1
-
-  # 关键：把隐藏字符打出来
-  printf '[%s] [sync_node] host=<%q>\n' "$(ts)" "$host" >&2
-  printf '[%s] [sync_node] root=<%q>\n' "$(ts)" "$root" >&2
 
   ensure_remote_root "$node" || return 1
 
-  cluster_ctl_log "sync repo: node=$node host=$host root=$root"
+  cluster_ctl_log "sync repo: node=$node root=$root"
 
   if ! rsync -az --delete \
     --exclude '.git' \
+    --exclude 'bin' \
     --exclude 'data' \
     --exclude 'logs' \
     --exclude 'tmp' \
@@ -191,7 +191,7 @@ sync_node() {
     --exclude '.vscode' \
     --exclude 'node_modules' \
     --exclude 'vendor' \
-    "$ROOT_DIR/" "${host}:${root%/}/" < /dev/null
+    "$ROOT_DIR/" "${node}:${root%/}/" < /dev/null
   then
     rc=$?
     printf '[%s] [sync_node] rsync failed rc=%s host=<%q> root=<%q>\n' "$(ts)" "$rc" "$host" "$root" >&2
@@ -205,17 +205,6 @@ sync_all_nodes() {
     [[ -z "$node" ]] && continue
     sync_node "$node"
   done < <(deploy_nodes)
-}
-
-run_remote_script_rel() {
-  local node="$1"
-  local script_rel="$2"
-  local root
-
-  root="$(root_of_node "$node")" || return 1
-
-  cluster_ctl_log "run remote script: node=$node script=$script_rel"
-  ssh_bash "$node" "cd $(printf '%q' "$root") && bash $(printf '%q' "$script_rel")"
 }
 
 run_remote_script_rel() {
@@ -324,31 +313,52 @@ cluster_sync_ensure() {
 
 cluster_ensure_pg() {
   local node
-  node="$(node_of_service pg)" || return 1
-  run_remote_script_rel "$node" "scripts/cluster/ensure_pg.sh"
+  node="$(host_of_service pg)" || {
+    cluster_ctl_die "failed to resolve host of service: pg"
+    return 1
+  }
+
+  run_remote_script_rel "$node" "scripts/cluster/ensure_pg.sh" || {
+    cluster_ctl_die "failed to ensure pg on node=$node"
+    return 1
+  }
 }
 
 cluster_ensure_kafka() {
   local node
-  node="$(node_of_service kafka)" || return 1
-  run_remote_script_rel "$node" "scripts/cluster/ensure_kafka.sh"
+  node="$(host_of_service kafka)" || {
+    cluster_ctl_die "failed to resolve host of service: kafka"
+    return 1
+  }
+
+  run_remote_script_rel "$node" "scripts/cluster/ensure_kafka.sh" || {
+    cluster_ctl_die "failed to ensure kafka on node=$node"
+    return 1
+  }
 }
 
-cluster_ensure_infra() {
-  local force="${1:-}"
+go_env_of_arch() {
+  local arch="$1"
 
-  cluster_sync_ensure "$force" || return 1
-
-  # 先 pg 后 kafka，保持现有时序
-  cluster_ensure_pg || return 1
-  cluster_ensure_kafka || return 1
-
-  cluster_ctl_log "cluster infra ensured"
+  case "$arch" in
+    linux_amd64)
+      GOOS_OUT=linux
+      GOARCH_OUT=amd64
+      ;;
+    linux_arm64)
+      GOOS_OUT=linux
+      GOARCH_OUT=arm64
+      ;;
+    android_arm64)
+      GOOS_OUT=android
+      GOARCH_OUT=arm64
+      ;;
+    *)
+      cluster_ctl_die "unsupported service arch: arch=$arch"
+      return 1
+      ;;
+  esac
 }
-
-# ------------------------------------------------------------------------------
-# infra ensure bundle
-# ------------------------------------------------------------------------------
 
 deploy_file_to_node() {
   local local_file="$1"
@@ -356,74 +366,186 @@ deploy_file_to_node() {
   local remote_file="$3"
 
   [[ -f "$local_file" ]] || {
-    cluster_ctl_die "local file not found: $local_file"
+    cluster_ctl_die "local file not found: local_file=$local_file node=$node remote_file=$remote_file"
     return 1
   }
 
   cluster_ctl_log "deploy file: $local_file -> $node:$remote_file"
 
   if node_is_local "$node"; then
-    mkdir -p "$(dirname "$remote_file")" || return 1
-    cp -f "$local_file" "$remote_file" || return 1
+    if [[ "$local_file" == "$remote_file" ]]; then
+      cluster_ctl_log "skip local deploy for same file: node=$node file=$local_file"
+      return 0
+    fi
+
+    mkdir -p "$(dirname "$remote_file")" || {
+      cluster_ctl_die "failed to mkdir local remote dir: node=$node remote_file=$remote_file"
+      return 1
+    }
+    cp -f "$local_file" "$remote_file" || {
+      cluster_ctl_die "failed to copy local file: local_file=$local_file remote_file=$remote_file"
+      return 1
+    }
     return 0
   fi
 
-  local host remote_dir
-  host="$(host_alias_of_node "$node")"
+  local remote_dir
   remote_dir="$(dirname "$remote_file")"
 
-  ssh_bash "$node" "mkdir -p $(printf '%q' "$remote_dir")" || return 1
-  rsync -az "$local_file" "$host:$remote_file" || return 1
+  ssh_bash "$node" "mkdir -p $(printf '%q' "$remote_dir")" || {
+    cluster_ctl_die "failed to ensure remote dir: node=$node remote_dir=$remote_dir"
+    return 1
+  }
+  rsync -az "$local_file" "$node:$remote_file" || {
+    cluster_ctl_die "failed to rsync file: local_file=$local_file node=$node remote_file=$remote_file"
+    return 1
+  }
 }
 
-writer_remote_platform() {
-  # 可在 cluster.env 覆盖：
-  #   WRITER_REMOTE_PLATFORM=linux_arm64
-  #   WRITER_REMOTE_PLATFORM=android_arm64
-  printf '%s' "${WRITER_REMOTE_PLATFORM:-android_arm64}"
-}
+ensure_local_service_binaries() {
+  local svc svc_lc arch local_bin_dir out goos goarch
 
-writer_cross_artifact() {
-  local platform
-  platform="$(writer_remote_platform)"
+  : "${ROOT_DIR:?ROOT_DIR not set}"
+  : "${COMPILE_SERVICE_SET:?COMPILE_SERVICE_SET not set}"
 
-  case "$platform" in
-    android_arm64)
-      printf '%s/bin/out/writer.android.arm64' "$ROOT_DIR"
-      ;;
-    linux_arm64)
-      printf '%s/bin/out/writer.linux.arm64' "$ROOT_DIR"
-      ;;
-    *)
-      cluster_ctl_die "unsupported WRITER_REMOTE_PLATFORM=$platform"
+  if [[ "${NO_BUILD:-false}" == "true" ]]; then
+    cluster_ctl_log "NO_BUILD=true; skip local service binary build"
+    return 0
+  fi
+
+  for svc in "${COMPILE_SERVICE_SET[@]}"; do
+    svc_lc="${svc,,}"
+
+    arch="$(cluster_ctl_getvar "${svc}_ARCH")"
+    [[ -n "$arch" ]] || {
+      cluster_ctl_die "missing env var: ${svc}_ARCH svc=$svc"
       return 1
-      ;;
-  esac
+    }
+
+    local_bin_dir="$(cluster_ctl_getvar "${svc}_LOCAL_BIN_DIR")"
+    [[ -n "$local_bin_dir" ]] || {
+      cluster_ctl_die "missing env var: ${svc}_LOCAL_BIN_DIR svc=$svc"
+      return 1
+    }
+
+    out="$local_bin_dir/$svc_lc"
+
+    mkdir -p "$local_bin_dir" || {
+      cluster_ctl_die "failed to ensure local bin dir: svc=$svc dir=$local_bin_dir"
+      return 1
+    }
+
+    go_env_of_arch "$arch" || {
+      cluster_ctl_die "failed to resolve go env: svc=$svc arch=$arch"
+      return 1
+    }
+    goos="$GOOS_OUT"
+    goarch="$GOARCH_OUT"
+
+    cluster_ctl_log "build service: svc=$svc arch=$arch goos=$goos goarch=$goarch out=$out"
+
+    GOOS="$goos" GOARCH="$goarch" \
+      go build -o "$out" "./cmd/$svc_lc" || {
+        cluster_ctl_die "failed to build service: svc=$svc arch=$arch out=$out"
+        return 1
+      }
+
+    chmod +x "$out" || {
+      cluster_ctl_die "failed to chmod built binary: svc=$svc out=$out"
+      return 1
+    }
+  done
+
+  cluster_ctl_log "all local service binaries ensured"
 }
 
-deploy_writer_binary() {
-  local node artifact remote_bin
-  node="$(node_of_service writer)" || return 1
-  artifact="$(writer_cross_artifact)" || return 1
-  remote_bin="$(bin_dir_of_node "$node")/writer"
+ensure_cluster_service_binaries() {
+  local svc svc_lc node local_bin_dir cluster_bin_dir local_file remote_file
 
-  [[ -f "$artifact" ]] || {
-    cluster_ctl_die "writer artifact not found: $artifact"
+  : "${COMPILE_SERVICE_SET:?COMPILE_SERVICE_SET not set}"
+
+  for svc in "${COMPILE_SERVICE_SET[@]}"; do
+    svc_lc="${svc,,}"
+
+    node="$(cluster_ctl_getvar "${svc}_NODE")"
+    [[ -n "$node" ]] || {
+      cluster_ctl_die "missing env var: ${svc}_NODE svc=$svc"
+      return 1
+    }
+
+    local_bin_dir="$(cluster_ctl_getvar "${svc}_LOCAL_BIN_DIR")"
+    [[ -n "$local_bin_dir" ]] || {
+      cluster_ctl_die "missing env var: ${svc}_LOCAL_BIN_DIR svc=$svc"
+      return 1
+    }
+
+    cluster_bin_dir="$(cluster_ctl_getvar "${svc}_CLUSTER_BIN_DIR")"
+    [[ -n "$cluster_bin_dir" ]] || {
+      cluster_ctl_die "missing env var: ${svc}_CLUSTER_BIN_DIR svc=$svc"
+      return 1
+    }
+
+    local_file="$local_bin_dir/$svc_lc"
+    remote_file="$cluster_bin_dir/$svc_lc"
+
+    [[ -f "$local_file" ]] || {
+      cluster_ctl_die "local artifact not found: svc=$svc local_file=$local_file"
+      return 1
+    }
+
+    cluster_ctl_log "deploy service: svc=$svc node=$node local=$local_file remote=$remote_file"
+
+    deploy_file_to_node "$local_file" "$node" "$remote_file" || {
+      cluster_ctl_die "failed to deploy service binary: svc=$svc node=$node local=$local_file remote=$remote_file"
+      return 1
+    }
+    ssh_bash "$node" "chmod +x $(printf '%q' "$remote_file")" || {
+      cluster_ctl_die "failed to chmod remote binary: svc=$svc node=$node remote=$remote_file"
+      return 1
+    }
+  done
+
+  cluster_ctl_log "all cluster service binaries ensured"
+}
+
+ensure_service_binaries() {
+  ensure_local_service_binaries || {
+    cluster_ctl_die "failed to ensure local service binaries"
+    return 1
+  }
+  ensure_cluster_service_binaries || {
+    cluster_ctl_die "failed to ensure cluster service binaries"
+    return 1
+  }
+}
+
+cluster_ensure_infra() {
+  local force="${1:-}"
+
+  cluster_sync_ensure "$force" || {
+    cluster_ctl_die "failed to ensure cluster sync: force=$force"
     return 1
   }
 
-  deploy_file_to_node "$artifact" "$node" "$remote_bin" || return 1
-  ssh_bash "$node" "chmod +x $(printf '%q' "$remote_bin")" || return 1
+  if [[ "$force" == "force" ]]; then
+    cluster_ctl_log "force mode: ensure service binaries now"
+    ensure_service_binaries || {
+      cluster_ctl_die "failed to ensure service binaries in force mode"
+      return 1
+    }
+  else
+    cluster_ctl_log "non-force mode: skip ensure service binaries"
+  fi
 
-  cluster_ctl_log "writer binary deployed: node=$node artifact=$artifact remote=$remote_bin"
-}
+  # 先 pg 后 kafka，保持现有时序
+  cluster_ensure_pg || {
+    cluster_ctl_die "failed to ensure pg infra"
+    return 1
+  }
+  cluster_ensure_kafka || {
+    cluster_ctl_die "failed to ensure kafka infra"
+    return 1
+  }
 
-node_is_local() {
-  local node="$1"
-  [[ "$node" == "$(controller_node)" ]]
-}
-
-run_local_bash() {
-  local cmd="$1"
-  bash -lc "$cmd"
+  cluster_ctl_log "cluster infra ensured"
 }

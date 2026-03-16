@@ -13,7 +13,7 @@ main() {
   [[ -n "$stamp" ]] || die "usage: $0 <stamp>"
 
   cluster_component_stream_run mockchain "$stamp" "" -- \
-    "$MOCKCHAIN_BIN_DIR/mockchain" \
+    "$MOCKCHAIN_CLUSTER_BIN_DIR/mockchain" \
       -db "$MOCK_DB" \
       -rpc "$MOCK_RPC" \
       -addr "$MOCK_ADDR" \

@@ -16,7 +16,7 @@ main() {
   [[ -n "$ready_fifo" ]] || die "usage: $0 <stamp> <ready_fifo>"
 
   cluster_component_stream_run writer "$stamp" "$ready_fifo" -- \
-    "$WRITER_BIN_DIR/writer" \
+    "$WRITER_CLUSTER_BIN_DIR/writer" \
       -brokers "$KAFKA_BROKERS" \
       -topic "$KAFKA_OUT_TOPIC" \
       -group "$WRITER_GROUP" \

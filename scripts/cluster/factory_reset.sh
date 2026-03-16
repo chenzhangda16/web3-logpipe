@@ -35,8 +35,8 @@ main() {
   cluster_ctl_require_cmds || exit 1
 
   local kafka_node pg_node full_reset node
-  kafka_node="$(node_of_service kafka)"
-  pg_node="$(node_of_service pg)"
+  kafka_node="$(host_of_service kafka)"
+  pg_node="$(host_of_service pg)"
   full_reset="${FULL_RESET:-0}"
 
   log "cluster factory reset begin"

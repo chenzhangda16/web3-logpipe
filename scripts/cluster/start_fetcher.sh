@@ -13,7 +13,7 @@ main() {
   [[ -n "$stamp" ]] || die "usage: $0 <stamp>"
 
   cluster_component_stream_run fetcher "$stamp" "" -- \
-    "$FETCHER_BIN_DIR/fetcher" \
+    "$FETCHER_CLUSTER_BIN_DIR/fetcher" \
       -rpc "$RPC_BASE" \
       -rpc-concurrency "$RPC_CONCURRENCY" \
       -brokers "$KAFKA_BROKERS" \

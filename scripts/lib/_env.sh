@@ -72,10 +72,15 @@ load_topology_stack() {
     arch="${NODE_ARCH[$node]}"
 
     printf -v "ROOT_${node}" '%s' "$root"
-    printf -v "BIN_DIR_${node}" '%s/bin/%s' "$root" "$arch"
-    printf -v "LOG_DIR_${node}" '%s/logs' "$root"
+    printf -v "ARCH_${node}" '%s' "$arch"
+    printf -v "LOCAL_BIN_DIR_${node}" '%s/%s' "$BIN_DIR" "$arch"
+    printf -v "CLUSTER_BIN_DIR_${node}" '%s/bin/cluster/%s' "$root" "$arch"
 
-    export "ROOT_${node}" "BIN_DIR_${node}" "LOG_DIR_${node}"
+    export \
+      "ROOT_${node}" \
+      "ARCH_${node}" \
+      "LOCAL_BIN_DIR_${node}" \
+      "CLUSTER_BIN_DIR_${node}"
   done
 
   for svc in "${!SERVICE_NODE[@]}"; do
@@ -83,20 +88,22 @@ load_topology_stack() {
     root="${NODE_ROOT[$node]}"
     arch="${NODE_ARCH[$node]}"
 
-    printf -v "${svc}_NODE" '%s' "$node"
+    printf -v "${svc}_NODE" '%s' "${node,,}"
     printf -v "${svc}_HOST" '%s' "${NODE_HOST[$node]}"
     printf -v "${svc}_IP" '%s' "${NODE_IP[$node]}"
     printf -v "${svc}_ROOT" '%s' "$root"
-    printf -v "${svc}_BIN_DIR" '%s/bin/%s' "$root" "$arch"
-    printf -v "${svc}_LOG_DIR" '%s/logs' "$root"
+    printf -v "${svc}_ARCH" '%s' "$arch"
+    printf -v "${svc}_LOCAL_BIN_DIR" '%s/%s' "$BIN_DIR" "$arch"
+    printf -v "${svc}_CLUSTER_BIN_DIR" '%s/bin/cluster/%s' "$root" "$arch"
 
     export \
       "${svc}_NODE" \
       "${svc}_HOST" \
       "${svc}_IP" \
       "${svc}_ROOT" \
-      "${svc}_BIN_DIR" \
-      "${svc}_LOG_DIR"
+      "${svc}_ARCH" \
+      "${svc}_LOCAL_BIN_DIR" \
+      "${svc}_CLUSTER_BIN_DIR"
   done
 
   for svc in "${!SERVICE_PORT[@]}"; do
@@ -137,6 +144,12 @@ load_runtime_env_stack() {
   : "${KAFKA_PORT:?KAFKA_PORT not set}"
 
   export KAFKA_BROKERS="${KAFKA_BROKERS:-${KAFKA_IP}:${KAFKA_PORT}}"
+
+  : "${KAFKA_HOME:?KAFKA_HOME not set}"
+  export KAFKA_SERVER_START="${KAFKA_SERVER_START:-$KAFKA_HOME/bin/kafka-server-start.sh}"
+  export KAFKA_STORAGE="${KAFKA_STORAGE:-$KAFKA_HOME/bin/kafka-storage.sh}"
+  export KAFKA_TOPICS_SH="${KAFKA_TOPICS_SH:-kafka-topics.sh}"
+  export KAFKA_CONFIG="${KAFKA_CONFIG:-$KAFKA_HOME/config/kraft/server.properties}"
 
   # ---------- misc ----------
   export no_proxy="${no_proxy:-$NO_PROXY}"
