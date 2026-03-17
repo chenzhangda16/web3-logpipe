@@ -54,5 +54,5 @@ cluster_component_stream_run() {
     cstream_log "component=$component hist=$hist"
   fi
 
-  stdbuf -oL -eL "$@" 2>&1 | tee -a "$hist"
+  stdbuf -oL -eL "$@" 2>&1 | tee -a "$hist" >/dev/null
 }

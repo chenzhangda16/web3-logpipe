@@ -36,6 +36,9 @@ load_base_path_stack() {
   PID_FILE="$PID_DIR/logpipe.pids"
   KAFKA_PID_FILE="$PID_DIR/kafka.pid"
   KAFKA_TAIL_PID_FILE="$PID_DIR/kafka_tail.pid"
+  if [[ "$mode" == local ]]; then
+    APP_KILL_RE="${APP_KILL_RE:-/bin/local/(mockchain|fetcher|processor|writer)\b}"
+  fi
 
   export ROOT_DIR SCRIPTS_DIR ENV_DIR CUR_MODE_SCRIPTS
   export DATA_DIR LOG_DIR BIN_DIR
@@ -43,7 +46,7 @@ load_base_path_stack() {
   export MOCK_DB FETCH_CKPT PROC_CKPT PROC_SPOOL
   export PGDATA
   export KAFKA_PROJECT_DIR KAFKA_PROJECT_LOG_DIR KAFKA_PROJECT_CONFIG
-  export PID_FILE KAFKA_PID_FILE KAFKA_TAIL_PID_FILE
+  export PID_FILE KAFKA_PID_FILE KAFKA_TAIL_PID_FILE APP_KILL_RE
 }
 
 ensure_base_path_stack() {

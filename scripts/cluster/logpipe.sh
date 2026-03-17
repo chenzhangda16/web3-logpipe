@@ -67,31 +67,17 @@ wait_remote_ready_fifo() {
   local fifo="$2"
   local timeout_sec="${3:-30}"
 
-  local spid start now
+  local root
+  root="$(root_of_node "$node")" || die "failed to resolve root for node=$node"
 
   if node_is_local "$node"; then
-    bash -lc "read -r _ < $(printf '%q' "$fifo")" &
+    (
+      cd "$root"
+      bash scripts/cluster/wait_ready_fifo.sh "$fifo" "$timeout_sec"
+    )
   else
-    ssh_bash "$node" "read -r _ < $(printf '%q' "$fifo")" &
+    ssh_bash "$node" "cd $(printf '%q' "$root") && bash scripts/cluster/wait_ready_fifo.sh $(printf '%q' "$fifo") $(printf '%q' "$timeout_sec")"
   fi
-  spid=$!
-
-  start="$(date +%s)"
-  while true; do
-    if ! kill -0 "$spid" >/dev/null 2>&1; then
-      wait "$spid"
-      return 0
-    fi
-
-    now="$(date +%s)"
-    if (( now - start >= timeout_sec )); then
-      kill "$spid" >/dev/null 2>&1 || true
-      wait "$spid" 2>/dev/null || true
-      die "timeout waiting for ready fifo: node=$node fifo=$fifo"
-    fi
-
-    sleep 0.2
-  done
 }
 
 is_pid_alive() {
@@ -137,7 +123,7 @@ service_node() {
 remote_ready_fifo_path() {
   local node="$1"
   local name="$2"
-  printf '%s/tmp/logpipe-ready/%s.ready.fifo' "$(root_of_node "$node")" "$name"
+  printf '%s/data/cluster/ready/%s.ready.fifo' "$(root_of_node "$node")" "$name"
 }
 
 cleanup_start() {
@@ -416,6 +402,14 @@ start() {
   start_remote_stream pid_fetch "$node_fetch" fetcher "scripts/cluster/start_fetcher.sh" "$ts_now"
   append_pid "$pid_fetch"
   log "fetcher transport pid=$pid_fetch latest=$LOG_DIR/fetcher.latest.log"
+
+  sleep 120
+#  if ! wait_remote_process_alive "$node_fetch" '/fetcher' 5; then
+#    log "fetcher failed to stay alive; dumping remote diagnostics..."
+#    ssh_bash "$node_fetch" "pgrep -af fetcher || true"
+#    die "fetcher not alive on node=$node_fetch"
+#  fi
+  log "fetcher process alive"
 
   trap - ERR INT TERM
 

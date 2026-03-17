@@ -97,7 +97,7 @@ log_dir_of_node() {
   if [[ -n "$val" ]]; then
     printf '%s' "$val"
   else
-    printf '%s/logs' "$(root_of_node "$node")"
+    printf '%s/logs/cluster' "$(root_of_node "$node")"
   fi
 }
 

@@ -42,15 +42,27 @@ main() {
   log "cluster factory reset begin"
   log "kafka node=$kafka_node pg node=$pg_node FULL_RESET=$full_reset"
 
-  log "phase 1: kill app processes on all nodes"
-  while read -r node; do
-    [[ -z "$node" ]] && continue
+  log "phase 1: kill app processes by service"
+
+  local svc svc_lc node cluster_bin_dir remote_bin
+
+  for svc in "${COMPILE_SERVICE_SET[@]}"; do
+    svc_lc="${svc,,}"
+
+    node="$(cluster_ctl_getvar "${svc}_NODE")"
+    [[ -n "$node" ]] || die "missing env var: ${svc}_NODE"
+
+    cluster_bin_dir="$(cluster_ctl_getvar "${svc}_CLUSTER_BIN_DIR")"
+    [[ -n "$cluster_bin_dir" ]] || die "missing env var: ${svc}_CLUSTER_BIN_DIR"
+
+    remote_bin="$cluster_bin_dir/$svc_lc"
+
     if remote_project_exists "$node"; then
-      run_remote_primitive_rel "$node" "scripts/cluster/kill_apps.sh"
+      run_remote_primitive_rel "$node" "scripts/cluster/kill_service.sh" "$svc" "$remote_bin"
     else
-      log "skip node=$node, project root missing"
+      log "skip svc=$svc node=$node, project root missing"
     fi
-  done < <(all_cluster_nodes)
+  done
 
   log "phase 2: stop infra"
   if remote_project_exists "$kafka_node"; then
