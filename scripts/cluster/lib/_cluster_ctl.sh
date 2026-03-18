@@ -549,3 +549,53 @@ cluster_ensure_infra() {
 
   cluster_ctl_log "cluster infra ensured"
 }
+
+# ------------------------------------------------------------------------------
+# service kill
+# ------------------------------------------------------------------------------
+
+kill_remote_service() {
+  local svc="$1"
+  local svc_lc node cluster_bin_dir remote_bin
+
+  [[ -n "$svc" ]] || {
+    cluster_ctl_die "service name is empty"
+    return 1
+  }
+
+  svc_lc="${svc,,}"
+
+  node="$(cluster_ctl_getvar "${svc}_NODE")"
+  [[ -n "$node" ]] || {
+    cluster_ctl_die "missing env var: ${svc}_NODE svc=$svc"
+    return 1
+  }
+
+  cluster_bin_dir="$(cluster_ctl_getvar "${svc}_CLUSTER_BIN_DIR")"
+  [[ -n "$cluster_bin_dir" ]] || {
+    cluster_ctl_die "missing env var: ${svc}_CLUSTER_BIN_DIR svc=$svc"
+    return 1
+  }
+
+  remote_bin="$cluster_bin_dir/$svc_lc"
+
+  if remote_project_exists "$node"; then
+    cluster_ctl_log "kill service: svc=$svc node=$node remote_bin=$remote_bin"
+    run_remote_primitive_rel "$node" "scripts/cluster/kill_service.sh" "$svc" "$remote_bin" || {
+      cluster_ctl_die "failed to kill service: svc=$svc node=$node remote_bin=$remote_bin"
+      return 1
+    }
+  else
+    cluster_ctl_log "skip kill service: svc=$svc node=$node project root missing"
+  fi
+}
+
+kill_all_remote_services() {
+  local svc
+
+  : "${COMPILE_SERVICE_SET:?COMPILE_SERVICE_SET not set}"
+
+  for svc in "${COMPILE_SERVICE_SET[@]}"; do
+    kill_remote_service "$svc" || return 1
+  done
+}

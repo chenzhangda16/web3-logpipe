@@ -4,15 +4,18 @@ set -euo pipefail
 # ------------------------------------------------------------------------------
 # scripts/cluster/logtail.sh
 #
-# runtime-only log tail helper:
-# - start remote ssh tail -F and mirror into local files
+# runtime-only log mirror helper:
+# - mirror remote component.latest.log into local files
+# - resolve latest symlink on every (re)connect
+# - auto reconnect when ssh/tail exits
 # - stop mirrored tails by pidfile
 #
 # usage:
+#   bash scripts/cluster/logtail.sh start mockchain
 #   bash scripts/cluster/logtail.sh start kafka
-#   bash scripts/cluster/logtail.sh start pg
 #   bash scripts/cluster/logtail.sh start logs/cluster/server.log
-#   bash scripts/cluster/logtail.sh stop  kafka
+#   bash scripts/cluster/logtail.sh status mockchain
+#   bash scripts/cluster/logtail.sh stop  mockchain
 # ------------------------------------------------------------------------------
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/scripts/lib/_bootstrap.sh"
@@ -47,6 +50,9 @@ abs_to_rel_under_root() {
   local root="$2"
 
   case "$abs" in
+    "$root")
+      printf '.'
+      ;;
     "$root"/*)
       printf '%s' "${abs#"$root"/}"
       ;;
@@ -56,21 +62,31 @@ abs_to_rel_under_root() {
   esac
 }
 
-log_rel_of_service() {
+latest_rel_of_service() {
   local svc="$1"
   local node root logdir logdir_rel
 
-  node="$(host_of_service "$svc")"
-  root="$(root_of_node "$node")"
-  logdir="$(log_dir_of_node "$node")"
-  logdir_rel="$(abs_to_rel_under_root "$logdir" "$root")"
-
   case "$svc" in
     kafka)
+      node="$(host_of_service kafka)"
+      root="$(root_of_node "$node")"
+      logdir="$(log_dir_of_node "$node")"
+      logdir_rel="$(abs_to_rel_under_root "$logdir" "$root")"
       printf '%s/kafka.latest.log' "$logdir_rel"
       ;;
     pg)
+      node="$(host_of_service pg)"
+      root="$(root_of_node "$node")"
+      logdir="$(log_dir_of_node "$node")"
+      logdir_rel="$(abs_to_rel_under_root "$logdir" "$root")"
       printf '%s/postgres.latest.log' "$logdir_rel"
+      ;;
+    mockchain|fetcher|processor|writer)
+      node="$(host_of_service "$svc")"
+      root="$(root_of_node "$node")"
+      logdir="$(log_dir_of_node "$node")"
+      logdir_rel="$(abs_to_rel_under_root "$logdir" "$root")"
+      printf '%s/%s.latest.log' "$logdir_rel" "$svc"
       ;;
     *)
       die "unsupported log service: $svc"
@@ -81,8 +97,8 @@ log_rel_of_service() {
 spec_to_relpath() {
   local spec="$1"
   case "$spec" in
-    kafka|pg)
-      log_rel_of_service "$spec"
+    kafka|pg|mockchain|fetcher|processor|writer)
+      latest_rel_of_service "$spec"
       ;;
     *)
       normalize_relpath "$spec"
@@ -115,22 +131,17 @@ stderr_file_of_rel() {
   printf '%s/%s.err.log' "$ERR_DIR" "$key"
 }
 
-remote_file_exists() {
-  local node="$1"
-  local remote_abs="$2"
-  ssh_bash "$node" "[[ -f $(printf '%q' "$remote_abs") ]]"
+state_file_of_rel() {
+  local rel="$1"
+  local key
+  key="$(printf '%s' "$rel" | sed 's#[^A-Za-z0-9._-]#_#g')"
+  printf '%s/%s.state' "$PID_DIR" "$key"
 }
 
-is_kafka_cluster_log_name() {
-  local name="$1"
-  case "$name" in
-    controller.log|kafka-authorizer.log|kafka-request.log|kafkaServer-gc.log|log-cleaner.log|server.log|state-change.log)
-      return 0
-      ;;
-    *)
-      return 1
-      ;;
-  esac
+remote_latest_exists() {
+  local node="$1"
+  local remote_abs="$2"
+  ssh_bash "$node" "[[ -e $(printf '%q' "$remote_abs") || -L $(printf '%q' "$remote_abs") ]]"
 }
 
 service_of_relpath() {
@@ -138,17 +149,45 @@ service_of_relpath() {
   local base
 
   case "$rel" in
+    */mockchain.latest.log|*/mockchain.*.log)
+      printf 'mockchain'
+      return 0
+      ;;
+    */fetcher.latest.log|*/fetcher.*.log)
+      printf 'fetcher'
+      return 0
+      ;;
+    */processor.latest.log|*/processor.*.log)
+      printf 'processor'
+      return 0
+      ;;
+    */writer.latest.log|*/writer.*.log)
+      printf 'writer'
+      return 0
+      ;;
     data/kafka/*)
       printf 'kafka'
       return 0
       ;;
-    logs/cluster/*)
+    logs/cluster/kafka.latest.log|logs/cluster/postgres.latest.log)
       base="$(basename "$rel")"
-      if is_kafka_cluster_log_name "$base"; then
+      if [[ "$base" == "kafka.latest.log" ]]; then
         printf 'kafka'
       else
         printf 'pg'
       fi
+      return 0
+      ;;
+    logs/cluster/*)
+      base="$(basename "$rel")"
+      case "$base" in
+        controller.log|kafka-authorizer.log|kafka-request.log|kafkaServer-gc.log|log-cleaner.log|server.log|state-change.log)
+          printf 'kafka'
+          ;;
+        *)
+          printf 'pg'
+          ;;
+      esac
       return 0
       ;;
     *)
@@ -168,11 +207,12 @@ node_of_relpath() {
 
 start_tail() {
   local spec="$1"
-  local rel node remote_abs local_abs pid_file err_file pid
+  local rel node remote_abs local_abs pid_file err_file state_file pid
 
   rel="$(spec_to_relpath "$spec")"
   pid_file="$(pid_file_of_rel "$rel")"
   err_file="$(stderr_file_of_rel "$rel")"
+  state_file="$(state_file_of_rel "$rel")"
 
   if [[ -f "$pid_file" ]]; then
     pid="$(cat "$pid_file" 2>/dev/null || true)"
@@ -186,18 +226,23 @@ start_tail() {
   node="$(node_of_relpath "$rel")"
   remote_abs="$(remote_abs_of_rel "$node" "$rel")"
 
-  if ! remote_file_exists "$node" "$remote_abs"; then
-    log "start skip: remote file not found node=$node rel=$rel"
+  if ! remote_latest_exists "$node" "$remote_abs"; then
+    log "start skip: remote file/link not found node=$node rel=$rel"
     return 0
   fi
 
   local_abs="$(local_abs_of_rel "$rel")"
-  mkdir -p "$(dirname "$local_abs")"
+  mkdir -p "$(dirname "$local_abs")" "$(dirname "$err_file")" "$(dirname "$state_file")"
+  : > "$state_file"
 
   log "start: node=$node rel=$rel -> local=$local_abs"
 
-  nohup ssh "$node" "tail -F $(printf '%q' "$remote_abs")" \
-    >> "$local_abs" 2>> "$err_file" &
+  nohup bash -c scripts/cluster/logtail_supervise.sh \
+   --node "$node" \
+   --remote-latest "$remote_abs" \
+   --local-log "$local_abs" \
+   --state-file "$err_file" \
+   --err-file "$state_file" </dev/null >/dev/null 2>&1 &
   pid=$!
 
   echo "$pid" > "$pid_file"
@@ -233,25 +278,49 @@ stop_tail() {
   rm -f "$pid_file"
 }
 
+status_tail() {
+  local spec="$1"
+  local rel pid_file state_file pid
+
+  rel="$(spec_to_relpath "$spec")"
+  pid_file="$(pid_file_of_rel "$rel")"
+  state_file="$(state_file_of_rel "$rel")"
+
+  if [[ ! -f "$pid_file" ]]; then
+    log "status: rel=$rel running=no"
+    return 0
+  fi
+
+  pid="$(cat "$pid_file" 2>/dev/null || true)"
+  if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+    log "status: rel=$rel running=yes pid=$pid"
+  else
+    log "status: rel=$rel running=no stale_pid=${pid:-<empty>}"
+  fi
+
+  if [[ -f "$state_file" ]]; then
+    tail -n 5 "$state_file"
+  fi
+}
+
 usage() {
-  cat <<'EOF'
+  cat <<'EOF2'
 Usage:
-  bash scripts/cluster/logtail.sh start <service-or-relpath>
-  bash scripts/cluster/logtail.sh stop  <service-or-relpath>
+  bash scripts/cluster/logtail.sh start  <service-or-relpath>
+  bash scripts/cluster/logtail.sh status <service-or-relpath>
+  bash scripts/cluster/logtail.sh stop   <service-or-relpath>
 
 Services:
-  kafka | pg
+  mockchain | fetcher | processor | writer | kafka | pg
 
 Examples:
-  bash scripts/cluster/logtail.sh start kafka
-  bash scripts/cluster/logtail.sh stop  kafka
+  bash scripts/cluster/logtail.sh start mockchain
+  bash scripts/cluster/logtail.sh status mockchain
+  bash scripts/cluster/logtail.sh stop  mockchain
 
   bash scripts/cluster/logtail.sh start logs/cluster/server.log
   bash scripts/cluster/logtail.sh stop  logs/cluster/server.log
-
-  bash scripts/cluster/logtail.sh start data/kafka/logs/server.log
-  bash scripts/cluster/logtail.sh stop  data/kafka/logs/server.log
-EOF
+EOF2
 }
 
 main() {
@@ -264,6 +333,10 @@ main() {
     start)
       [[ -n "$target" ]] || die "start requires <service-or-relpath>"
       start_tail "$target"
+      ;;
+    status)
+      [[ -n "$target" ]] || die "status requires <service-or-relpath>"
+      status_tail "$target"
       ;;
     stop)
       [[ -n "$target" ]] || die "stop requires <service-or-relpath>"
