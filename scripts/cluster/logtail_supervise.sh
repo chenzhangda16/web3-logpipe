@@ -100,6 +100,7 @@ ssh_opts=(
 
 remote_tail_latest() {
   ssh "${ssh_opts[@]}" "$NODE" "tail -F \"$REMOTE_LATEST\""
+#  ssh "${ssh_opts[@]}" "$NODE" "tail -n +1 -F \"$REMOTE_LATEST\""
 }
 
 write_state "supervisor start: node=$NODE remote_latest=$REMOTE_LATEST local_log=$LOCAL_LOG"

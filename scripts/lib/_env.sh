@@ -60,25 +60,32 @@ load_topology_stack() {
 
   require_assoc_array NODE_IP
   require_assoc_array NODE_HOST
-  require_assoc_array NODE_ARCH
+  require_assoc_array NODE_GOOS
+  require_assoc_array NODE_GOARCH
   require_assoc_array NODE_ROOT
   require_assoc_array SERVICE_NODE
   require_assoc_array SERVICE_PORT
 
-  local node svc root arch
+  local node svc root goos goarch target
 
   for node in "${!NODE_ROOT[@]}"; do
     root="${NODE_ROOT[$node]}"
-    arch="${NODE_ARCH[$node]}"
+    goos="${NODE_GOOS[$node]}"
+    goarch="${NODE_GOARCH[$node]}"
+    target="${goos}_${goarch}"
 
     printf -v "ROOT_${node}" '%s' "$root"
-    printf -v "ARCH_${node}" '%s' "$arch"
-    printf -v "LOCAL_BIN_DIR_${node}" '%s/%s' "$BIN_DIR" "$arch"
-    printf -v "CLUSTER_BIN_DIR_${node}" '%s/bin/cluster/%s' "$root" "$arch"
+    printf -v "GOOS_${node}" '%s' "$goos"
+    printf -v "GOARCH_${node}" '%s' "$goarch"
+    printf -v "TARGET_${node}" '%s' "$target"
+    printf -v "LOCAL_BIN_DIR_${node}" '%s/%s' "$BIN_DIR" "$target"
+    printf -v "CLUSTER_BIN_DIR_${node}" '%s/bin/cluster/%s' "$root" "$target"
 
     export \
       "ROOT_${node}" \
-      "ARCH_${node}" \
+      "GOOS_${node}" \
+      "GOARCH_${node}" \
+      "TARGET_${node}" \
       "LOCAL_BIN_DIR_${node}" \
       "CLUSTER_BIN_DIR_${node}"
   done
@@ -86,22 +93,28 @@ load_topology_stack() {
   for svc in "${!SERVICE_NODE[@]}"; do
     node="${SERVICE_NODE[$svc]}"
     root="${NODE_ROOT[$node]}"
-    arch="${NODE_ARCH[$node]}"
+    goos="${NODE_GOOS[$node]}"
+    goarch="${NODE_GOARCH[$node]}"
+    target="${goos}_${goarch}"
 
     printf -v "${svc}_NODE" '%s' "${node,,}"
     printf -v "${svc}_HOST" '%s' "${NODE_HOST[$node]}"
     printf -v "${svc}_IP" '%s' "${NODE_IP[$node]}"
     printf -v "${svc}_ROOT" '%s' "$root"
-    printf -v "${svc}_ARCH" '%s' "$arch"
-    printf -v "${svc}_LOCAL_BIN_DIR" '%s/%s' "$BIN_DIR" "$arch"
-    printf -v "${svc}_CLUSTER_BIN_DIR" '%s/bin/cluster/%s' "$root" "$arch"
+    printf -v "${svc}_GOOS" '%s' "$goos"
+    printf -v "${svc}_GOARCH" '%s' "$goarch"
+    printf -v "${svc}_TARGET" '%s' "$target"
+    printf -v "${svc}_LOCAL_BIN_DIR" '%s/%s' "$BIN_DIR" "$target"
+    printf -v "${svc}_CLUSTER_BIN_DIR" '%s/bin/cluster/%s' "$root" "$target"
 
     export \
       "${svc}_NODE" \
       "${svc}_HOST" \
       "${svc}_IP" \
       "${svc}_ROOT" \
-      "${svc}_ARCH" \
+      "${svc}_GOOS" \
+      "${svc}_GOARCH" \
+      "${svc}_TARGET" \
       "${svc}_LOCAL_BIN_DIR" \
       "${svc}_CLUSTER_BIN_DIR"
   done

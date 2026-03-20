@@ -5,17 +5,18 @@ set -euo pipefail
 # scripts/cluster/logtail.sh
 #
 # runtime-only log mirror helper:
-# - mirror remote component.latest.log into local files
-# - resolve latest symlink on every (re)connect
+# - mirror remote *.latest.log into local files
 # - auto reconnect when ssh/tail exits
-# - stop mirrored tails by pidfile
+# - manage local tail supervisors by pidfile
+# - provide optional interactive shell for ad-hoc tail management
 #
 # usage:
 #   bash scripts/cluster/logtail.sh start mockchain
-#   bash scripts/cluster/logtail.sh start kafka
-#   bash scripts/cluster/logtail.sh start logs/cluster/server.log
-#   bash scripts/cluster/logtail.sh status mockchain
-#   bash scripts/cluster/logtail.sh stop  mockchain
+#   bash scripts/cluster/logtail.sh start all
+#   bash scripts/cluster/logtail.sh stop  kafka
+#   bash scripts/cluster/logtail.sh stop  all
+#   bash scripts/cluster/logtail.sh status all
+#   bash scripts/cluster/logtail.sh interactive --start-all
 # ------------------------------------------------------------------------------
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/scripts/lib/_bootstrap.sh"
@@ -26,6 +27,8 @@ source "$ROOT_DIR/scripts/cluster/lib/_cluster_ctl.sh"
 ts()  { date '+%F %T'; }
 log() { echo "[$(ts)] [logtail] $*"; }
 die() { echo "[$(ts)] [logtail] ERROR: $*" >&2; exit 1; }
+
+DEFAULT_TAIL_SERVICES=(mockchain fetcher processor writer)
 
 require_cmds() {
   command -v nohup >/dev/null 2>&1 || die "required command not found: nohup"
@@ -117,31 +120,30 @@ local_abs_of_rel() {
   printf '%s/%s' "$ROOT_DIR" "$rel"
 }
 
+key_of_rel() {
+  local rel="$1"
+  printf '%s' "$rel" | sed 's#[^A-Za-z0-9._-]#_#g'
+}
+
 pid_file_of_rel() {
   local rel="$1"
-  local key
-  key="$(printf '%s' "$rel" | sed 's#[^A-Za-z0-9._-]#_#g')"
-  printf '%s/%s.pid' "$PID_DIR" "$key"
+  printf '%s/%s.pid' "$PID_DIR" "$(key_of_rel "$rel")"
 }
 
 stderr_file_of_rel() {
   local rel="$1"
-  local key
-  key="$(printf '%s' "$rel" | sed 's#[^A-Za-z0-9._-]#_#g')"
-  printf '%s/%s.err.log' "$ERR_DIR" "$key"
+  printf '%s/%s.err.log' "$ERR_DIR" "$(key_of_rel "$rel")"
 }
 
 state_file_of_rel() {
   local rel="$1"
-  local key
-  key="$(printf '%s' "$rel" | sed 's#[^A-Za-z0-9._-]#_#g')"
-  printf '%s/%s.state' "$PID_DIR" "$key"
+  printf '%s/%s.state' "$PID_DIR" "$(key_of_rel "$rel")"
 }
 
 remote_latest_exists() {
   local node="$1"
   local remote_abs="$2"
-  ssh_bash "$node" "[[ -e $(printf '%q' "$remote_abs") || -L $(printf '%q' "$remote_abs") ]]"
+  ssh_bash "$node" "[[ -e $(printf '%q' "$remote_abs") ]]"
 }
 
 service_of_relpath() {
@@ -200,9 +202,12 @@ service_of_relpath() {
 node_of_relpath() {
   local rel="$1"
   local svc
-
   svc="$(service_of_relpath "$rel")"
   host_of_service "$svc"
+}
+
+all_known_tail_targets() {
+  printf '%s\n' "${DEFAULT_TAIL_SERVICES[@]}"
 }
 
 start_tail() {
@@ -227,7 +232,7 @@ start_tail() {
   remote_abs="$(remote_abs_of_rel "$node" "$rel")"
 
   if ! remote_latest_exists "$node" "$remote_abs"; then
-    log "start skip: remote file/link not found node=$node rel=$rel"
+    log "start skip: remote file not found node=$node rel=$rel"
     return 0
   fi
 
@@ -237,12 +242,13 @@ start_tail() {
 
   log "start: node=$node rel=$rel -> local=$local_abs"
 
-  nohup bash -c scripts/cluster/logtail_supervise.sh \
-   --node "$node" \
-   --remote-latest "$remote_abs" \
-   --local-log "$local_abs" \
-   --state-file "$err_file" \
-   --err-file "$state_file" </dev/null >/dev/null 2>&1 &
+  nohup bash "$ROOT_DIR/scripts/cluster/logtail_supervise.sh" \
+      --node "$node" \
+      --remote-latest "$remote_abs" \
+      --local-log "$local_abs" \
+      --state-file "$state_file" \
+      --err-file "$err_file" \
+      </dev/null >/dev/null 2>&1 &
   pid=$!
 
   echo "$pid" > "$pid_file"
@@ -303,23 +309,145 @@ status_tail() {
   fi
 }
 
+start_all() {
+  local spec
+  while read -r spec; do
+    [[ -n "$spec" ]] || continue
+    start_tail "$spec"
+  done < <(all_known_tail_targets)
+}
+
+stop_all() {
+  local spec
+  while read -r spec; do
+    [[ -n "$spec" ]] || continue
+    stop_tail "$spec"
+  done < <(all_known_tail_targets)
+}
+
+status_all() {
+  local spec
+  while read -r spec; do
+    [[ -n "$spec" ]] || continue
+    status_tail "$spec"
+  done < <(all_known_tail_targets)
+}
+
+interactive_help() {
+  cat <<'EOF'
+Interactive commands:
+  help
+  quit
+  exit
+
+  tail <target>
+  untail <target>
+  start <target>
+  stop <target>
+
+  status
+  status all
+  status <target>
+
+Examples:
+  tail kafka
+  tail pg
+  tail logs/cluster/server.log
+  untail kafka
+  status
+  status writer
+EOF
+}
+
+interactive_loop() {
+  local line cmd arg1 rest
+
+  log "interactive mode started"
+  log "type 'help' for commands"
+
+  while true; do
+    printf '> '
+    IFS= read -r line || {
+      printf '\n'
+      break
+    }
+
+    line="${line#"${line%%[![:space:]]*}"}"
+    line="${line%"${line##*[![:space:]]}"}"
+    [[ -n "$line" ]] || continue
+
+    cmd="${line%%[[:space:]]*}"
+    if [[ "$cmd" == "$line" ]]; then
+      arg1=""
+      rest=""
+    else
+      rest="${line#"$cmd"}"
+      rest="${rest#"${rest%%[![:space:]]*}"}"
+      arg1="$rest"
+    fi
+
+    case "$cmd" in
+      help)
+        interactive_help
+        ;;
+      quit|exit)
+        break
+        ;;
+      tail|start)
+        [[ -n "$arg1" ]] || {
+          log "interactive: '$cmd' requires <target>"
+          continue
+        }
+        start_tail "$arg1"
+        ;;
+      untail|stop)
+        [[ -n "$arg1" ]] || {
+          log "interactive: '$cmd' requires <target>"
+          continue
+        }
+        stop_tail "$arg1"
+        ;;
+      status)
+        if [[ -z "$arg1" || "$arg1" == "all" ]]; then
+          status_all
+        else
+          status_tail "$arg1"
+        fi
+        ;;
+      *)
+        log "interactive: unknown command: $cmd"
+        ;;
+    esac
+  done
+
+  log "interactive mode exit"
+}
+
 usage() {
   cat <<'EOF2'
 Usage:
-  bash scripts/cluster/logtail.sh start  <service-or-relpath>
-  bash scripts/cluster/logtail.sh status <service-or-relpath>
-  bash scripts/cluster/logtail.sh stop   <service-or-relpath>
+  bash scripts/cluster/logtail.sh start       <service-or-relpath>
+  bash scripts/cluster/logtail.sh stop        <service-or-relpath>
+  bash scripts/cluster/logtail.sh status      <service-or-relpath>
+
+  bash scripts/cluster/logtail.sh start       all
+  bash scripts/cluster/logtail.sh stop        all
+  bash scripts/cluster/logtail.sh status      all
+
+  bash scripts/cluster/logtail.sh interactive [--start-all]
 
 Services:
   mockchain | fetcher | processor | writer | kafka | pg
 
 Examples:
   bash scripts/cluster/logtail.sh start mockchain
-  bash scripts/cluster/logtail.sh status mockchain
   bash scripts/cluster/logtail.sh stop  mockchain
+  bash scripts/cluster/logtail.sh status all
 
   bash scripts/cluster/logtail.sh start logs/cluster/server.log
   bash scripts/cluster/logtail.sh stop  logs/cluster/server.log
+
+  bash scripts/cluster/logtail.sh interactive --start-all
 EOF2
 }
 
@@ -331,16 +459,36 @@ main() {
 
   case "$action" in
     start)
-      [[ -n "$target" ]] || die "start requires <service-or-relpath>"
-      start_tail "$target"
+      [[ -n "$target" ]] || die "start requires <service-or-relpath|all>"
+      if [[ "$target" == "all" ]]; then
+        start_all
+      else
+        start_tail "$target"
+      fi
       ;;
     status)
-      [[ -n "$target" ]] || die "status requires <service-or-relpath>"
-      status_tail "$target"
+      [[ -n "$target" ]] || die "status requires <service-or-relpath|all>"
+      if [[ "$target" == "all" ]]; then
+        status_all
+      else
+        status_tail "$target"
+      fi
       ;;
     stop)
-      [[ -n "$target" ]] || die "stop requires <service-or-relpath>"
-      stop_tail "$target"
+      [[ -n "$target" ]] || die "stop requires <service-or-relpath|all>"
+      if [[ "$target" == "all" ]]; then
+        stop_all
+      else
+        stop_tail "$target"
+      fi
+      ;;
+    interactive)
+      if [[ "${2:-}" == "--start-all" ]]; then
+        start_all
+      elif [[ -n "${2:-}" ]]; then
+        die "interactive only supports optional --start-all"
+      fi
+      interactive_loop
       ;;
     ""|-h|--help|help)
       usage

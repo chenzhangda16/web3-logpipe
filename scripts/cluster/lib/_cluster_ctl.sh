@@ -337,29 +337,6 @@ cluster_ensure_kafka() {
   }
 }
 
-go_env_of_arch() {
-  local arch="$1"
-
-  case "$arch" in
-    linux_amd64)
-      GOOS_OUT=linux
-      GOARCH_OUT=amd64
-      ;;
-    linux_arm64)
-      GOOS_OUT=linux
-      GOARCH_OUT=arm64
-      ;;
-    android_arm64)
-      GOOS_OUT=android
-      GOARCH_OUT=arm64
-      ;;
-    *)
-      cluster_ctl_die "unsupported service arch: arch=$arch"
-      return 1
-      ;;
-  esac
-}
-
 deploy_file_to_node() {
   local local_file="$1"
   local node="$2"
@@ -403,7 +380,7 @@ deploy_file_to_node() {
 }
 
 ensure_local_service_binaries() {
-  local svc svc_lc arch local_bin_dir out goos goarch
+  local svc svc_lc goos goarch target local_bin_dir out
 
   : "${ROOT_DIR:?ROOT_DIR not set}"
   : "${COMPILE_SERVICE_SET:?COMPILE_SERVICE_SET not set}"
@@ -416,9 +393,21 @@ ensure_local_service_binaries() {
   for svc in "${COMPILE_SERVICE_SET[@]}"; do
     svc_lc="${svc,,}"
 
-    arch="$(cluster_ctl_getvar "${svc}_ARCH")"
-    [[ -n "$arch" ]] || {
-      cluster_ctl_die "missing env var: ${svc}_ARCH svc=$svc"
+    goos="$(cluster_ctl_getvar "${svc}_GOOS")"
+    [[ -n "$goos" ]] || {
+      cluster_ctl_die "missing env var: ${svc}_GOOS svc=$svc"
+      return 1
+    }
+
+    goarch="$(cluster_ctl_getvar "${svc}_GOARCH")"
+    [[ -n "$goarch" ]] || {
+      cluster_ctl_die "missing env var: ${svc}_GOARCH svc=$svc"
+      return 1
+    }
+
+    target="$(cluster_ctl_getvar "${svc}_TARGET")"
+    [[ -n "$target" ]] || {
+      cluster_ctl_die "missing env var: ${svc}_TARGET svc=$svc"
       return 1
     }
 
@@ -435,18 +424,11 @@ ensure_local_service_binaries() {
       return 1
     }
 
-    go_env_of_arch "$arch" || {
-      cluster_ctl_die "failed to resolve go env: svc=$svc arch=$arch"
-      return 1
-    }
-    goos="$GOOS_OUT"
-    goarch="$GOARCH_OUT"
-
-    cluster_ctl_log "build service: svc=$svc arch=$arch goos=$goos goarch=$goarch out=$out"
+    cluster_ctl_log "build service: svc=$svc target=$target goos=$goos goarch=$goarch out=$out"
 
     GOOS="$goos" GOARCH="$goarch" \
       go build -o "$out" "./cmd/$svc_lc" || {
-        cluster_ctl_die "failed to build service: svc=$svc arch=$arch out=$out"
+        cluster_ctl_die "failed to build service: svc=$svc target=$target out=$out"
         return 1
       }
 
