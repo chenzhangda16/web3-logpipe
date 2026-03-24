@@ -99,7 +99,8 @@ ssh_opts=(
 )
 
 remote_tail_latest() {
-  ssh "${ssh_opts[@]}" "$NODE" "tail -F \"$REMOTE_LATEST\""
+#  ssh "${ssh_opts[@]}" "$NODE" "tail -F \"$REMOTE_LATEST\""
+  ssh "${ssh_opts[@]}" "$NODE" "tail -n 0 -F \"$REMOTE_LATEST\""
 #  ssh "${ssh_opts[@]}" "$NODE" "tail -n +1 -F \"$REMOTE_LATEST\""
 }
 

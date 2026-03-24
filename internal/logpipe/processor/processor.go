@@ -43,7 +43,8 @@ type Processor struct {
 }
 
 func New(cfg Config) (*Processor, error) {
-	procBench := bench.NewProcBench("processor", 1*time.Second)
+	const DefaultLinkCapacityBytesPS = 294 * 1024 * 1024
+	procBench := bench.NewProcBench("processor", 1*time.Second, "eth3", DefaultLinkCapacityBytesPS)
 	sp, err := ingest.NewFileSpool(cfg.SpoolPath,
 		ingest.WithSpoolSyncEveryN(2000),
 		ingest.WithSpoolSyncEveryDur(20*time.Millisecond),

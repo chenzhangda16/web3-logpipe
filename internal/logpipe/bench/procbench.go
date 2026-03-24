@@ -1,17 +1,19 @@
 package bench
 
 import (
-	"fmt"
-	"log"
+	"runtime"
 	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/chenzhangda16/web3-logpipe/internal/logpipe/sysstat"
 )
 
 // ProcBench：processor 低侵入 perf/stat 采样器（统一 ingest/dispatcher/window）
 type ProcBench struct {
 	tag         string
+	tick        int64
 	reportEvery time.Duration
 	stopCh      chan struct{}
 
@@ -60,9 +62,13 @@ type ProcBench struct {
 	winPerf map[int]WinPerf // last 1s aggregated by runner itself
 	winAgg  [4]WinAgg
 	started int32
+
+	cpuReader *sysstat.CPUReader
+	netReader *sysstat.NetReader
+	iface     string
 }
 
-func NewProcBench(tag string, every time.Duration) *ProcBench {
+func NewProcBench(tag string, every time.Duration, iface string, capacityBytesPS float64) *ProcBench {
 	if every <= 0 {
 		every = 1 * time.Second
 	}
@@ -72,6 +78,9 @@ func NewProcBench(tag string, every time.Duration) *ProcBench {
 		stopCh:        make(chan struct{}),
 		decodeSamples: make([]int64, 0, 200000),
 		winPerf:       make(map[int]WinPerf, 8),
+		cpuReader:     sysstat.NewCPUReader(),
+		netReader:     sysstat.NewNetReader(iface, capacityBytesPS),
+		iface:         iface,
 	}
 	go b.reportLoop()
 	return b
@@ -233,6 +242,7 @@ func (b *ProcBench) printTick() {
 	if wmBlkEv > 0 {
 		wmBlkAvg = time.Duration(wmBlkNS / wmBlkEv)
 	}
+
 	phase := "cold"
 	if atomic.LoadInt32(&b.phaseSteady) == 1 {
 		phase = "steady"
@@ -252,14 +262,6 @@ func (b *ProcBench) printTick() {
 	b.snapMu.Lock()
 	snap := b.snap
 	b.snapMu.Unlock()
-
-	// window perf snapshot
-	b.winMu.Lock()
-	wp := make(map[int]WinPerf, len(b.winPerf))
-	for k, v := range b.winPerf {
-		wp[k] = v
-	}
-	b.winMu.Unlock()
 
 	// derived
 	msgPS := float64(msgs) / sec
@@ -281,18 +283,21 @@ func (b *ProcBench) printTick() {
 		rawBlkAvg = time.Duration(rawBlkNS / rawBlkEv)
 	}
 
-	// format window perf compactly
-	// 例：w0:busy32% mv120 avgW=8ms avgK=1ms | w3:busy95% ...
-	winStr := sep
+	elapsedNS := b.reportEvery.Nanoseconds()
 
-	elapsed := b.reportEvery
 	var wEv [4]int64
 	var wNS [4]int64
 	var wMx [4]int64
 	var wAvg [4]time.Duration
 
+	winMoveW := make(map[string]ProcBlockStageJSON, len(b.winAgg))
+	wins := make(map[string]ProcWinJSON, len(b.winAgg))
+	winQ := make(map[string]ProcQueueDepthJSON, len(b.winAgg))
+	coreW := make(map[string]ProcCoreWin, len(b.winAgg))
+
 	for i := 0; i < len(b.winAgg); i++ {
 		t := b.winAgg[i].SwapTick()
+
 		wEv[i] = atomic.SwapInt64(&b.winMoveWEv[i], 0)
 		wNS[i] = atomic.SwapInt64(&b.winMoveWNS[i], 0)
 		wMx[i] = atomic.SwapInt64(&b.winMoveWMaxNS[i], 0)
@@ -300,62 +305,155 @@ func (b *ProcBench) printTick() {
 			wAvg[i] = time.Duration(wNS[i] / wEv[i])
 		}
 
-		busy := 0.0
-		if elapsed > 0 {
-			busy = float64(t.WorkNS) / float64(elapsed.Nanoseconds())
-			if busy < 0 {
-				busy = 0
+		k := strconv.Itoa(i)
+
+		winMoveW[k] = ProcBlockStageJSON{
+			Ev:    wEv[i],
+			SumNs: wNS[i],
+			AvgNs: wAvg[i].Nanoseconds(),
+			MaxNs: wMx[i],
+		}
+
+		winQ[k] = ProcQueueDepthJSON{
+			Len: snap.WinChLen[i],
+			Cap: snap.WinChCap[i],
+		}
+
+		busyPct := 0.0
+		if elapsedNS > 0 {
+			busyPct = float64(t.WorkNS) * 100 / float64(elapsedNS)
+			if busyPct < 0 {
+				busyPct = 0
 			}
-			if busy > 1 {
-				busy = 1
+			if busyPct > 100 {
+				busyPct = 100
 			}
 		}
 
-		avgWait := time.Duration(0)
-		avgWork := time.Duration(0)
+		coreW[k] = ProcCoreWin{
+			BusyPct:   busyPct,
+			WorkCoreS: float64(t.WorkNS) / 1e9,
+			WaitCoreS: float64(t.WaitNS) / 1e9,
+			Moves:     t.Moves,
+		}
+
+		avgWaitNS := int64(0)
+		avgWorkNS := int64(0)
 		if t.Moves > 0 {
-			avgWait = time.Duration(t.WaitNS / t.Moves)
-			avgWork = time.Duration(t.WorkNS / t.Moves)
+			avgWaitNS = t.WaitNS / t.Moves
+			avgWorkNS = t.WorkNS / t.Moves
 		}
 
-		winStr += fmt.Sprintf(
-			"w%d:busy=%.1f%% mv=%d aw=%s ak=%s mw=%s mk=%s"+sep,
-			i,
-			busy*100,
-			t.Moves,
-			avgWait,
-			avgWork,
-			t.MaxWait,
-			t.MaxWork,
-		)
+		wins[k] = ProcWinJSON{
+			BusyPct:   busyPct,
+			Moves:     t.Moves,
+			AvgWaitNs: avgWaitNS,
+			AvgWorkNs: avgWorkNS,
+			MaxWaitNs: t.MaxWait.Nanoseconds(),
+			MaxWorkNs: t.MaxWork.Nanoseconds(),
+		}
 	}
 
-	log.Printf("[procbench][%s] tag=%s re_off=%d blk=%d msg_ps=%.1f msgs=%d spool_ok=%d spool_err=%d spool_avg=%s spool_max=%s "+
-		"decode_ok=%d decode_err=%d decode_avg=%s decode_p50=%s decode_p90=%s decode_p99=%s decode_max=%s "+
-		"raw_send_block_ev=%d raw_send_block_sum=%s raw_send_block_avg=%s raw_send_block_max=%s "+
-		"winmove=%d winmove_block_ev=%d winmove_block_sum=%s winmove_block_avg=%s winmove_block_max=%s"+sep+
-		"wm0_ev=%d wm0_sum=%s wm0_avg=%s wm0_max=%s"+sep+
-		"wm1_ev=%d wm1_sum=%s wm1_avg=%s wm1_max=%s"+sep+
-		"wm1_ev=%d wm1_sum=%s wm1_avg=%s wm1_max=%s"+sep+
-		"wm1_ev=%d wm1_sum=%s wm1_avg=%s wm1_max=%s"+sep+
-		"rawCh=%d/%d winCh0=%d/%d winCh1=%d/%d winCh2=%d/%d winCh3=%d/%d wins={%s}",
-		phase, b.tag, off, bn,
-		msgPS, msgs,
-		spOK, spEr, spAvg, time.Duration(spMax),
-		deOK, deEr, deAvg, p50, p90, p99, time.Duration(deMax),
-		rawBlkEv, time.Duration(rawBlkNS), rawBlkAvg, time.Duration(rawBlkMx),
-		winMv, wmBlkEv, time.Duration(wmBlkNS), wmBlkAvg, time.Duration(wmBlkMx),
-		wEv[0], time.Duration(wNS[0]), wAvg[0], time.Duration(wMx[0]),
-		wEv[1], time.Duration(wNS[1]), wAvg[1], time.Duration(wMx[1]),
-		wEv[2], time.Duration(wNS[2]), wAvg[2], time.Duration(wMx[2]),
-		wEv[3], time.Duration(wNS[3]), wAvg[3], time.Duration(wMx[3]),
-		snap.RawChLen, snap.RawChCap,
-		snap.WinChLen[0], snap.WinChCap[0],
-		snap.WinChLen[1], snap.WinChCap[1],
-		snap.WinChLen[2], snap.WinChCap[2],
-		snap.WinChLen[3], snap.WinChCap[3],
-		winStr,
-	)
+	flow := ProcFlowJSON{
+		Tag:   b.tag,
+		Tick:  atomic.AddInt64(&b.tick, 1), // 或者用你现有 tick 来源
+		TsMs:  time.Now().UnixMilli(),
+		Phase: phase,
+
+		ReOff: off,
+		Blk:   bn,
+
+		MsgPS: msgPS,
+		Msgs:  msgs,
+
+		Spool: ProcSpoolJSON{
+			Ok:    spOK,
+			Err:   spEr,
+			AvgNs: spAvg.Nanoseconds(),
+			MaxNs: spMax,
+		},
+
+		Decode: ProcDecodeJSON{
+			Ok:    deOK,
+			Err:   deEr,
+			AvgNs: deAvg.Nanoseconds(),
+			P50Ns: p50.Nanoseconds(),
+			P90Ns: p90.Nanoseconds(),
+			P99Ns: p99.Nanoseconds(),
+			MaxNs: deMax,
+		},
+
+		RawSendBlock: ProcBlockStageJSON{
+			Ev:    rawBlkEv,
+			SumNs: rawBlkNS,
+			AvgNs: rawBlkAvg.Nanoseconds(),
+			MaxNs: rawBlkMx,
+		},
+
+		WinMove: ProcWinMoveJSON{
+			N: winMv,
+			Block: ProcBlockStageJSON{
+				Ev:    wmBlkEv,
+				SumNs: wmBlkNS,
+				AvgNs: wmBlkAvg.Nanoseconds(),
+				MaxNs: wmBlkMx,
+			},
+			W: winMoveW,
+		},
+
+		Q: ProcQueueJSON{
+			Raw: ProcQueueDepthJSON{
+				Len: snap.RawChLen,
+				Cap: snap.RawChCap,
+			},
+			Win: winQ,
+		},
+
+		Wins: wins,
+	}
+
+	EmitBench("processor", "flow", flow)
+
+	cpuPct := 0.0
+	if b.cpuReader != nil {
+		if v, ok, err := b.cpuReader.ReadPct(); err == nil && ok {
+			cpuPct = v
+		}
+	}
+
+	core := ProcCoreJSON{
+		CoreJSON: CoreJSON{
+			Tag:        b.tag,
+			Tick:       flow.Tick,
+			TsMs:       flow.TsMs,
+			CpuPct:     cpuPct,
+			Gomaxprocs: runtime.GOMAXPROCS(0),
+			Goroutines: runtime.NumGoroutine(),
+		},
+		W: coreW,
+	}
+
+	EmitBench("processor", "core", core)
+
+	rxBps, txBps, rxPct, txPct := 0.0, 0.0, 0.0, 0.0
+	if b.netReader != nil {
+		if rx, tx, rp, tp, ok, err := b.netReader.Read(); err == nil && ok {
+			rxBps, txBps, rxPct, txPct = rx, tx, rp, tp
+		}
+	}
+
+	wire := WireJSON{
+		Tag:   flow.Tag,
+		Tick:  flow.Tick,
+		TsMs:  flow.TsMs,
+		Iface: b.iface,
+		RxBps: rxBps,
+		TxBps: txBps,
+		RxPct: rxPct,
+		TxPct: txPct,
+	}
+
+	EmitBench("processor", "wire", wire)
 }
 
 func (b *ProcBench) AddWinMoveBlock(d time.Duration) {

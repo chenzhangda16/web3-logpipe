@@ -30,6 +30,76 @@ require_assoc_array() {
   }
 }
 
+controller_node_key() {
+  printf '%s' "${CONTROLLER_NODE:?CONTROLLER_NODE not set}"
+}
+
+_build_topology_node_sets() {
+  require_assoc_array SERVICE_NODE
+  require_assoc_array NODE_HOST
+
+  local controller_key controller_host
+  local svc node_key node_host
+  local tmp_deploy=()
+  local tmp_all=()
+  declare -A seen_deploy=()
+  declare -A seen_all=()
+
+  controller_key="$(controller_node_key)"
+  controller_host="${NODE_HOST[$controller_key]:?NODE_HOST[$controller_key] not set}"
+
+  # all cluster nodes: controller first
+  seen_all["$controller_host"]=1
+  tmp_all+=("$controller_host")
+
+  for svc in "${!SERVICE_NODE[@]}"; do
+    node_key="${SERVICE_NODE[$svc]}"
+    [[ -z "$node_key" ]] && continue
+
+    node_host="${NODE_HOST[$node_key]:-}"
+    [[ -z "$node_host" ]] && continue
+
+    if [[ -z "${seen_all[$node_host]:-}" ]]; then
+      seen_all["$node_host"]=1
+      tmp_all+=("$node_host")
+    fi
+
+    if [[ "$node_host" != "$controller_host" && -z "${seen_deploy[$node_host]:-}" ]]; then
+      seen_deploy["$node_host"]=1
+      tmp_deploy+=("$node_host")
+    fi
+  done
+
+  # 排序，避免关联数组遍历顺序导致日志/行为飘忽
+  if ((${#tmp_deploy[@]} > 0)); then
+    mapfile -t DEPLOY_NODES < <(printf '%s\n' "${tmp_deploy[@]}" | sort)
+  else
+    DEPLOY_NODES=()
+  fi
+
+  if ((${#tmp_all[@]} > 0)); then
+    mapfile -t ALL_CLUSTER_NODES < <(printf '%s\n' "${tmp_all[@]}" | sort)
+    # controller 希望稳定在第一位，则重排一次
+    if [[ "${ALL_CLUSTER_NODES[0]:-}" != "$controller_host" ]]; then
+      local rest=()
+      local n
+      for n in "${ALL_CLUSTER_NODES[@]}"; do
+        [[ "$n" == "$controller_host" ]] && continue
+        rest+=("$n")
+      done
+      ALL_CLUSTER_NODES=("$controller_host" "${rest[@]}")
+    fi
+  else
+    ALL_CLUSTER_NODES=("$controller_host")
+  fi
+
+  export CONTROLLER_HOST="$controller_host"
+  export DEPLOY_NODES_STR="${DEPLOY_NODES[*]:-}"
+  export ALL_CLUSTER_NODES_STR="${ALL_CLUSTER_NODES[*]:-}"
+  export DEPLOY_NODE_COUNT="${#DEPLOY_NODES[@]}"
+  export ALL_CLUSTER_NODE_COUNT="${#ALL_CLUSTER_NODES[@]}"
+}
+
 load_topology_stack() {
   local mode="${1:?mode required}"
 
@@ -54,6 +124,15 @@ load_topology_stack() {
     export ROOT_LOCAL="$ROOT_DIR"
     export BIN_DIR_LOCAL="$BIN_DIR"
     export LOG_DIR_LOCAL="$LOG_DIR"
+
+    # local 模式也给一套兼容拓扑产物，避免外部引用时报空
+    export CONTROLLER_HOST=127.0.0.1
+    declare -ag DEPLOY_NODES=()
+    declare -ag ALL_CLUSTER_NODES=(127.0.0.1)
+    export DEPLOY_NODES_STR=""
+    export ALL_CLUSTER_NODES_STR="127.0.0.1"
+    export DEPLOY_NODE_COUNT=0
+    export ALL_CLUSTER_NODE_COUNT=1
 
     return 0
   fi
@@ -123,6 +202,11 @@ load_topology_stack() {
     printf -v "${svc}_PORT" '%s' "${SERVICE_PORT[$svc]}"
     export "${svc}_PORT"
   done
+
+  # 派生节点集合（供兼容函数与旧调用点使用）
+  declare -ag DEPLOY_NODES=()
+  declare -ag ALL_CLUSTER_NODES=()
+  _build_topology_node_sets
 
   # compatibility aliases
   export MOCK_RPC_HOST="$MOCKCHAIN_HOST"

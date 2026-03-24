@@ -13,6 +13,9 @@ if [[ -n "${__WEB3_LOGPIPE_CLUSTER_CTL_LIB_SOURCED:-}" ]]; then
 fi
 __WEB3_LOGPIPE_CLUSTER_CTL_LIB_SOURCED=1
 
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)/scripts/lib/_bootstrap.sh"
+bootstrap cluster
+
 cluster_ctl_ts() { date '+%F %T'; }
 
 cluster_ctl_log() {
@@ -53,23 +56,32 @@ cluster_ctl_getvar() {
 # topology helpers
 # ----------------------------------------------------------------------
 
-controller_node() {
-  printf '%s' main
-}
-
-deploy_nodes() {
-  # 暂时保留硬编码；后续再收敛到 cluster.env
-  printf '%s\n' pc127 m2 pixel
-}
-
-all_cluster_nodes() {
-  printf '%s\n' "$(controller_node)"
-  deploy_nodes
-}
-
 node_is_local() {
-  local node="$1"
-  [[ "${node}" == "$(controller_node)" ]]
+  local node="${1:?node required}"
+  [[ "$node" == "${CONTROLLER_HOST:?CONTROLLER_HOST not set}" ]]
+}
+
+# 兼容旧接口：返回 controller host，如 main
+controller_node() {
+  printf '%s' "${CONTROLLER_HOST:?CONTROLLER_HOST not set}"
+}
+
+# 兼容旧接口：按行输出需要同步/远端部署的节点
+deploy_nodes() {
+  local node
+  for node in "${DEPLOY_NODES[@]:-}"; do
+    [[ -z "$node" ]] && continue
+    printf '%s\n' "$node"
+  done
+}
+
+# 兼容旧接口：按行输出全集群节点（含 controller）
+all_cluster_nodes() {
+  local node
+  for node in "${ALL_CLUSTER_NODES[@]:-}"; do
+    [[ -z "$node" ]] && continue
+    printf '%s\n' "$node"
+  done
 }
 
 run_local_bash() {

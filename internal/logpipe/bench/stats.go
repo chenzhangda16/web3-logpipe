@@ -1,14 +1,16 @@
 package bench
 
 import (
+	"encoding/json"
+	"fmt"
 	"math"
 	"sort"
 	"time"
 )
 
-var sep string = "\n"
+//var sep string = "\n"
 
-//var sep string = " "
+var sep string = " "
 
 func percentiles(ns []int64) (p50, p90, p99 time.Duration) {
 	if len(ns) == 0 {
@@ -20,6 +22,7 @@ func percentiles(ns []int64) (p50, p90, p99 time.Duration) {
 	p99 = time.Duration(ns[idx(ns, 0.99)])
 	return
 }
+
 func idx(ns []int64, q float64) int {
 	if len(ns) == 0 {
 		return 0
@@ -38,4 +41,12 @@ func idx(ns []int64, q float64) int {
 		x = len(ns) - 1
 	}
 	return x
+}
+
+func EmitBench(role, kind string, v any) {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return
+	}
+	fmt.Printf("BENCHv1\t%s\t%s\t%s\n", role, kind, b)
 }

@@ -1,15 +1,18 @@
 package bench
 
 import (
-	"log"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/chenzhangda16/web3-logpipe/internal/logpipe/sysstat"
 )
 
 // FetchBench: 低侵入 perf/stat 采样器（类似 rpcbench 风格）
 type FetchBench struct {
 	tag         string
+	tick        int64
 	reportEvery time.Duration
 
 	// counters
@@ -36,6 +39,10 @@ type FetchBench struct {
 	samples []int64 // rpc latency ns, per-window
 	stopCh  chan struct{}
 	sampler atomic.Value // stores QueueSampler
+
+	cpuReader *sysstat.CPUReader
+	netReader *sysstat.NetReader
+	iface     string
 }
 
 type QueueSampler func() QueueSnapshot
@@ -47,7 +54,7 @@ func (b *FetchBench) SetQueueSampler(fn QueueSampler) {
 	b.sampler.Store(fn)
 }
 
-func NewFetchBench(tag string, every time.Duration) *FetchBench {
+func NewFetchBench(tag string, every time.Duration, iface string, capacityBytesPS float64) *FetchBench {
 	if every <= 0 {
 		every = 1 * time.Second
 	}
@@ -56,6 +63,9 @@ func NewFetchBench(tag string, every time.Duration) *FetchBench {
 		reportEvery: every,
 		samples:     make([]int64, 0, 200000),
 		stopCh:      make(chan struct{}),
+		cpuReader:   sysstat.NewCPUReader(),
+		iface:       iface,
+		netReader:   sysstat.NewNetReader(iface, capacityBytesPS),
 	}
 	go b.reportLoop()
 	return b
@@ -139,6 +149,7 @@ func (b *FetchBench) printTick() {
 			snap = fn()
 		}
 	}
+
 	ok := atomic.SwapInt64(&b.rpcOKPages, 0)
 	er := atomic.SwapInt64(&b.rpcErrPages, 0)
 	bl := atomic.SwapInt64(&b.rpcBlocks, 0)
@@ -156,9 +167,9 @@ func (b *FetchBench) printTick() {
 	inpEv := atomic.SwapInt64(&b.inputBlockEv, 0)
 	inpMx := atomic.SwapInt64(&b.inputBlockMaxNS, 0)
 
-	inpAvg := time.Duration(0)
+	inpAvgNS := int64(0)
 	if inpEv > 0 {
-		inpAvg = time.Duration(inpNS / inpEv)
+		inpAvgNS = inpNS / inpEv
 	}
 
 	// snapshot samples then reset window
@@ -170,25 +181,107 @@ func (b *FetchBench) printTick() {
 	p50, p90, p99 := percentiles(s)
 
 	totalPages := ok + er
-	avg := time.Duration(0)
+	avgNS := int64(0)
 	if totalPages > 0 {
-		avg = time.Duration(sum / totalPages)
+		avgNS = sum / totalPages
 	}
 
 	sec := b.reportEvery.Seconds()
-	rpcPPS := float64(totalPages) / sec
-	rpcBPS := float64(bl) / sec
 
-	enqBPS := float64(enq) / sec
-	ackBPS := float64(ack) / sec
+	rpcPPS := 0.0
+	rpcBPS := 0.0
+	enqBPS := 0.0
+	ackBPS := 0.0
+	if sec > 0 {
+		rpcPPS = float64(totalPages) / sec
+		rpcBPS = float64(bl) / sec
+		enqBPS = float64(enq) / sec
+		ackBPS = float64(ack) / sec
+	}
 
-	log.Printf("[fetchbench] tag=%s rpc_pps=%.1f rpc_bps=%.1f rpc_ok=%d rpc_err=%d rpc_avg=%s rpc_p50=%s rpc_p90=%s rpc_p99=%s rpc_max=%s "+
-		"enq_bps=%.1f ack_bps=%.1f prod_err=%d lag_fatal=%d ckpt_save=%d input_block=%s window=%s "+
-		"req=%d/%d resp=%d/%d input_block_ev=%d input_block_sum=%s input_block_avg=%s input_block_max=%s",
-		b.tag,
-		rpcPPS, rpcBPS, ok, er, avg, p50, p90, p99, time.Duration(mx),
-		enqBPS, ackBPS, pe, lf, ck, time.Duration(inpNS), b.reportEvery,
-		snap.PgReqLen, snap.PgReqCap, snap.PgRespLen, snap.PgRespCap,
-		inpEv, time.Duration(inpNS), inpAvg, time.Duration(inpMx),
-	)
+	flow := FetchFlowJSON{
+		Tag:  b.tag,
+		Tick: atomic.AddInt64(&b.tick, 1),
+		TsMs: time.Now().UnixMilli(),
+
+		RPC: FetchRPCJSON{
+			PPS:   rpcPPS,
+			BPS:   rpcBPS,
+			Ok:    ok,
+			Err:   er,
+			AvgNs: avgNS,
+			P50Ns: p50.Nanoseconds(),
+			P90Ns: p90.Nanoseconds(),
+			P99Ns: p99.Nanoseconds(),
+			MaxNs: mx,
+		},
+
+		Blk: FetchBlkJSON{
+			EnqBPS: enqBPS,
+			AckBPS: ackBPS,
+		},
+
+		Event: FetchEventJSON{
+			ProdErr:  pe,
+			LagFatal: lf,
+			CkptSave: ck,
+		},
+
+		InputBlock: FetchBlockStageJSON{
+			SumNs: inpNS,
+			Ev:    inpEv,
+			AvgNs: inpAvgNS,
+			MaxNs: inpMx,
+		},
+
+		Q: FetchQueueJSON{
+			Req: FetchQueueDepthJSON{
+				Len: snap.PgReqLen,
+				Cap: snap.PgReqCap,
+			},
+			Resp: FetchQueueDepthJSON{
+				Len: snap.PgRespLen,
+				Cap: snap.PgRespCap,
+			},
+		},
+	}
+
+	EmitBench("fetcher", "flow", flow)
+	cpuPct := 0.0
+	if b.cpuReader != nil {
+		if v, ok, err := b.cpuReader.ReadPct(); err == nil && ok {
+			cpuPct = v
+		}
+	}
+
+	core := CoreJSON{
+		Tag:        b.tag,
+		Tick:       flow.Tick,
+		TsMs:       flow.TsMs,
+		CpuPct:     cpuPct,
+		Gomaxprocs: runtime.GOMAXPROCS(0),
+		Goroutines: runtime.NumGoroutine(),
+	}
+
+	EmitBench("fetcher", "core", core)
+
+	rxBps, txBps, rxPct, txPct := 0.0, 0.0, 0.0, 0.0
+	if b.netReader != nil {
+		if rx, tx, rp, tp, ok, err := b.netReader.Read(); err == nil && ok {
+			rxBps, txBps, rxPct, txPct = rx, tx, rp, tp
+		}
+	}
+
+	wire := WireJSON{
+		Tag:   flow.Tag,
+		Tick:  flow.Tick,
+		TsMs:  flow.TsMs,
+		Iface: b.iface,
+		RxBps: rxBps,
+		TxBps: txBps,
+		RxPct: rxPct,
+		TxPct: txPct,
+	}
+
+	EmitBench("fetcher", "wire", wire)
 }

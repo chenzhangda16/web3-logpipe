@@ -345,7 +345,8 @@ func (f *Fetcher) produceLoop(ctx context.Context) error {
 func (f *Fetcher) Run(parent context.Context) error {
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
-	f.bench = bench.NewFetchBench("coldstart24h", 1*time.Second)
+	const DefaultLinkCapacityBytesPS = 294 * 1024 * 1024
+	f.bench = bench.NewFetchBench("coldstart24h", 1*time.Second, "eth0", DefaultLinkCapacityBytesPS)
 	f.bench.SetQueueSampler(func() bench.QueueSnapshot {
 		return bench.QueueSnapshot{
 			PgReqLen:  len(f.pgReqCh),
