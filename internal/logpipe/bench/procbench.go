@@ -353,67 +353,7 @@ func (b *ProcBench) printTick() {
 			MaxWorkNs: t.MaxWork.Nanoseconds(),
 		}
 	}
-
-	flow := ProcFlowJSON{
-		Tag:   b.tag,
-		Tick:  atomic.AddInt64(&b.tick, 1), // 或者用你现有 tick 来源
-		TsMs:  time.Now().UnixMilli(),
-		Phase: phase,
-
-		ReOff: off,
-		Blk:   bn,
-
-		MsgPS: msgPS,
-		Msgs:  msgs,
-
-		Spool: ProcSpoolJSON{
-			Ok:    spOK,
-			Err:   spEr,
-			AvgNs: spAvg.Nanoseconds(),
-			MaxNs: spMax,
-		},
-
-		Decode: ProcDecodeJSON{
-			Ok:    deOK,
-			Err:   deEr,
-			AvgNs: deAvg.Nanoseconds(),
-			P50Ns: p50.Nanoseconds(),
-			P90Ns: p90.Nanoseconds(),
-			P99Ns: p99.Nanoseconds(),
-			MaxNs: deMax,
-		},
-
-		RawSendBlock: ProcBlockStageJSON{
-			Ev:    rawBlkEv,
-			SumNs: rawBlkNS,
-			AvgNs: rawBlkAvg.Nanoseconds(),
-			MaxNs: rawBlkMx,
-		},
-
-		WinMove: ProcWinMoveJSON{
-			N: winMv,
-			Block: ProcBlockStageJSON{
-				Ev:    wmBlkEv,
-				SumNs: wmBlkNS,
-				AvgNs: wmBlkAvg.Nanoseconds(),
-				MaxNs: wmBlkMx,
-			},
-			W: winMoveW,
-		},
-
-		Q: ProcQueueJSON{
-			Raw: ProcQueueDepthJSON{
-				Len: snap.RawChLen,
-				Cap: snap.RawChCap,
-			},
-			Win: winQ,
-		},
-
-		Wins: wins,
-	}
-
-	EmitBench("processor", "flow", flow)
-
+	// core
 	cpuPct := 0.0
 	if b.cpuReader != nil {
 		if v, ok, err := b.cpuReader.ReadPct(); err == nil && ok {
@@ -421,39 +361,89 @@ func (b *ProcBench) printTick() {
 		}
 	}
 
-	core := ProcCoreJSON{
-		CoreJSON: CoreJSON{
-			Tag:        b.tag,
-			Tick:       flow.Tick,
-			TsMs:       flow.TsMs,
-			CpuPct:     cpuPct,
-			Gomaxprocs: runtime.GOMAXPROCS(0),
-			Goroutines: runtime.NumGoroutine(),
-		},
-		W: coreW,
-	}
-
-	EmitBench("processor", "core", core)
-
+	// wire
 	rxBps, txBps, rxPct, txPct := 0.0, 0.0, 0.0, 0.0
 	if b.netReader != nil {
 		if rx, tx, rp, tp, ok, err := b.netReader.Read(); err == nil && ok {
 			rxBps, txBps, rxPct, txPct = rx, tx, rp, tp
 		}
 	}
+	procJson := ProcJson{
+		Tag:  b.tag,
+		Tick: atomic.AddInt64(&b.tick, 1), // 或者用你现有 tick 来源
+		TsMs: time.Now().UnixMilli(),
+		Core: ProcCoreJSON{
+			CoreJSON: CoreJSON{
+				CpuPct:     cpuPct,
+				Gomaxprocs: runtime.GOMAXPROCS(0),
+				Goroutines: runtime.NumGoroutine(),
+			},
+			W: coreW,
+		},
+		Wire: WireJSON{
+			Iface: b.iface,
+			RxBps: rxBps,
+			TxBps: txBps,
+			RxPct: rxPct,
+			TxPct: txPct,
+		},
+		Flow: ProcFlowJSON{
 
-	wire := WireJSON{
-		Tag:   flow.Tag,
-		Tick:  flow.Tick,
-		TsMs:  flow.TsMs,
-		Iface: b.iface,
-		RxBps: rxBps,
-		TxBps: txBps,
-		RxPct: rxPct,
-		TxPct: txPct,
+			Phase: phase,
+
+			ReOff: off,
+			Blk:   bn,
+
+			MsgPS: msgPS,
+			Msgs:  msgs,
+
+			Spool: ProcSpoolJSON{
+				Ok:    spOK,
+				Err:   spEr,
+				AvgNs: spAvg.Nanoseconds(),
+				MaxNs: spMax,
+			},
+
+			Decode: ProcDecodeJSON{
+				Ok:    deOK,
+				Err:   deEr,
+				AvgNs: deAvg.Nanoseconds(),
+				P50Ns: p50.Nanoseconds(),
+				P90Ns: p90.Nanoseconds(),
+				P99Ns: p99.Nanoseconds(),
+				MaxNs: deMax,
+			},
+
+			RawSendBlock: ProcBlockStageJSON{
+				Ev:    rawBlkEv,
+				SumNs: rawBlkNS,
+				AvgNs: rawBlkAvg.Nanoseconds(),
+				MaxNs: rawBlkMx,
+			},
+
+			WinMove: ProcWinMoveJSON{
+				N: winMv,
+				Block: ProcBlockStageJSON{
+					Ev:    wmBlkEv,
+					SumNs: wmBlkNS,
+					AvgNs: wmBlkAvg.Nanoseconds(),
+					MaxNs: wmBlkMx,
+				},
+				W: winMoveW,
+			},
+
+			Q: ProcQueueJSON{
+				Raw: ProcQueueDepthJSON{
+					Len: snap.RawChLen,
+					Cap: snap.RawChCap,
+				},
+				Win: winQ,
+			},
+
+			Wins: wins,
+		},
 	}
-
-	EmitBench("processor", "wire", wire)
+	EmitBench("processor", procJson)
 }
 
 func (b *ProcBench) AddWinMoveBlock(d time.Duration) {

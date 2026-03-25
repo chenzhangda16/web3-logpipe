@@ -9,12 +9,12 @@ logview_tmp_root() {
   echo "./tmp/logview"
 }
 
-logview_pid_file() {
+logview_dispatch_pid_file() {
   echo "$(logview_mode_root)/dispatcher.pid"
 }
 
-logview_session_name() {
-  echo "logview-cluster"
+logview_dispatch_log() {
+  echo "$(logview_mode_root)/dispatch.latest.log"
 }
 
 logview_fifo_path() {
@@ -29,14 +29,12 @@ ensure_logview_dirs() {
 
 create_logview_fifos() {
   ensure_logview_dirs
+
   local names=(
-    fetcher.flow
-    fetcher.core
-    processor.flow
-    processor.core
-    processor.wins
-    writer.flow
+    fetcher.frame
+    processor.frame
   )
+
   local n p
   for n in "${names[@]}"; do
     p="$(logview_fifo_path "$n")"
@@ -49,8 +47,4 @@ remove_logview_fifos() {
   root="$(logview_tmp_root)"
   [[ -d "$root" ]] || return 0
   find "$root" -maxdepth 1 -type p -name '*.fifo' -delete || true
-}
-
-logview_dispatch_log() {
-  echo "$(logview_mode_root)/dispatch.latest.log"
 }

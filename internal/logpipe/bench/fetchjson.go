@@ -1,10 +1,6 @@
 package bench
 
 type FetchFlowJSON struct {
-	Tag  string `json:"tag"`
-	Tick int64  `json:"tick"`
-	TsMs int64  `json:"ts_ms"`
-
 	RPC FetchRPCJSON `json:"rpc"`
 	Blk FetchBlkJSON `json:"blk"`
 
@@ -51,4 +47,13 @@ type FetchQueueJSON struct {
 type FetchQueueDepthJSON struct {
 	Len int `json:"len"`
 	Cap int `json:"cap"`
+}
+
+type FetchJson struct {
+	Tag  string        `json:"tag"`
+	Tick int64         `json:"tick"`
+	TsMs int64         `json:"ts_ms"`
+	Core CoreJSON      `json:"core"`
+	Wire WireJSON      `json:"wire"`
+	Flow FetchFlowJSON `json:"flow"`
 }

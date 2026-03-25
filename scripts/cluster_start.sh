@@ -26,10 +26,10 @@ TS="$(date '+%Y%m%d_%H%M%S')"
 nohup "./scripts/$MODE/logpipe.sh" start \
   2>&1 | tee -a "./logs/$MODE/run.latest.log" "./logs/$MODE/run.start.$TS.log" &
 
-# logview（不要抢前台）
-#sleep 1
-#nohup "./scripts/$MODE/logview.sh" start \
-#  >> "./logs/$MODE/run.latest.log" 2>&1 &
+# logview (experimental; keep current foreground console unchanged)
+# sleep 1
+# nohup "./scripts/$MODE/logview.sh" start --mode split \
+#   >> "./logs/$MODE/run.latest.log" 2>&1 &
 
 # 主控制台
 "./scripts/$MODE/logtail.sh" interactive --start-all \

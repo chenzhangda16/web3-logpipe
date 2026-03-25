@@ -1,9 +1,6 @@
 package bench
 
 type ProcFlowJSON struct {
-	Tag   string `json:"tag"`
-	Tick  int64  `json:"tick"`
-	TsMs  int64  `json:"ts_ms"`
 	Phase string `json:"phase"`
 
 	ReOff int64 `json:"re_off"`
@@ -79,4 +76,13 @@ type ProcCoreWin struct {
 	WorkCoreS float64 `json:"work_core_s"`
 	WaitCoreS float64 `json:"wait_core_s"`
 	Moves     int64   `json:"moves"`
+}
+
+type ProcJson struct {
+	Tag  string       `json:"tag"`
+	Tick int64        `json:"tick"`
+	TsMs int64        `json:"ts_ms"`
+	Core ProcCoreJSON `json:"core"`
+	Wire WireJSON     `json:"wire"`
+	Flow ProcFlowJSON `json:"flow"`
 }

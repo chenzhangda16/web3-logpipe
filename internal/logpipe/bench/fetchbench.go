@@ -199,72 +199,14 @@ func (b *FetchBench) printTick() {
 		ackBPS = float64(ack) / sec
 	}
 
-	flow := FetchFlowJSON{
-		Tag:  b.tag,
-		Tick: atomic.AddInt64(&b.tick, 1),
-		TsMs: time.Now().UnixMilli(),
-
-		RPC: FetchRPCJSON{
-			PPS:   rpcPPS,
-			BPS:   rpcBPS,
-			Ok:    ok,
-			Err:   er,
-			AvgNs: avgNS,
-			P50Ns: p50.Nanoseconds(),
-			P90Ns: p90.Nanoseconds(),
-			P99Ns: p99.Nanoseconds(),
-			MaxNs: mx,
-		},
-
-		Blk: FetchBlkJSON{
-			EnqBPS: enqBPS,
-			AckBPS: ackBPS,
-		},
-
-		Event: FetchEventJSON{
-			ProdErr:  pe,
-			LagFatal: lf,
-			CkptSave: ck,
-		},
-
-		InputBlock: FetchBlockStageJSON{
-			SumNs: inpNS,
-			Ev:    inpEv,
-			AvgNs: inpAvgNS,
-			MaxNs: inpMx,
-		},
-
-		Q: FetchQueueJSON{
-			Req: FetchQueueDepthJSON{
-				Len: snap.PgReqLen,
-				Cap: snap.PgReqCap,
-			},
-			Resp: FetchQueueDepthJSON{
-				Len: snap.PgRespLen,
-				Cap: snap.PgRespCap,
-			},
-		},
-	}
-
-	EmitBench("fetcher", "flow", flow)
+	// core
 	cpuPct := 0.0
 	if b.cpuReader != nil {
 		if v, ok, err := b.cpuReader.ReadPct(); err == nil && ok {
 			cpuPct = v
 		}
 	}
-
-	core := CoreJSON{
-		Tag:        b.tag,
-		Tick:       flow.Tick,
-		TsMs:       flow.TsMs,
-		CpuPct:     cpuPct,
-		Gomaxprocs: runtime.GOMAXPROCS(0),
-		Goroutines: runtime.NumGoroutine(),
-	}
-
-	EmitBench("fetcher", "core", core)
-
+	// wire
 	rxBps, txBps, rxPct, txPct := 0.0, 0.0, 0.0, 0.0
 	if b.netReader != nil {
 		if rx, tx, rp, tp, ok, err := b.netReader.Read(); err == nil && ok {
@@ -272,16 +214,64 @@ func (b *FetchBench) printTick() {
 		}
 	}
 
-	wire := WireJSON{
-		Tag:   flow.Tag,
-		Tick:  flow.Tick,
-		TsMs:  flow.TsMs,
-		Iface: b.iface,
-		RxBps: rxBps,
-		TxBps: txBps,
-		RxPct: rxPct,
-		TxPct: txPct,
-	}
+	fetchJson := FetchJson{
+		Tag:  b.tag,
+		Tick: atomic.AddInt64(&b.tick, 1),
+		TsMs: time.Now().UnixMilli(),
+		Core: CoreJSON{
+			CpuPct:     cpuPct,
+			Gomaxprocs: runtime.GOMAXPROCS(0),
+			Goroutines: runtime.NumGoroutine(),
+		},
+		Wire: WireJSON{
+			Iface: b.iface,
+			RxBps: rxBps,
+			TxBps: txBps,
+			RxPct: rxPct,
+			TxPct: txPct,
+		},
+		Flow: FetchFlowJSON{
+			RPC: FetchRPCJSON{
+				PPS:   rpcPPS,
+				BPS:   rpcBPS,
+				Ok:    ok,
+				Err:   er,
+				AvgNs: avgNS,
+				P50Ns: p50.Nanoseconds(),
+				P90Ns: p90.Nanoseconds(),
+				P99Ns: p99.Nanoseconds(),
+				MaxNs: mx,
+			},
 
-	EmitBench("fetcher", "wire", wire)
+			Blk: FetchBlkJSON{
+				EnqBPS: enqBPS,
+				AckBPS: ackBPS,
+			},
+
+			Event: FetchEventJSON{
+				ProdErr:  pe,
+				LagFatal: lf,
+				CkptSave: ck,
+			},
+
+			InputBlock: FetchBlockStageJSON{
+				SumNs: inpNS,
+				Ev:    inpEv,
+				AvgNs: inpAvgNS,
+				MaxNs: inpMx,
+			},
+
+			Q: FetchQueueJSON{
+				Req: FetchQueueDepthJSON{
+					Len: snap.PgReqLen,
+					Cap: snap.PgReqCap,
+				},
+				Resp: FetchQueueDepthJSON{
+					Len: snap.PgRespLen,
+					Cap: snap.PgRespCap,
+				},
+			},
+		},
+	}
+	EmitBench("fetcher", fetchJson)
 }

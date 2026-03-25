@@ -8,10 +8,6 @@ import (
 	"time"
 )
 
-//var sep string = "\n"
-
-var sep string = " "
-
 func percentiles(ns []int64) (p50, p90, p99 time.Duration) {
 	if len(ns) == 0 {
 		return 0, 0, 0
@@ -43,10 +39,10 @@ func idx(ns []int64, q float64) int {
 	return x
 }
 
-func EmitBench(role, kind string, v any) {
+func EmitBench(role string, v any) {
 	b, err := json.Marshal(v)
 	if err != nil {
 		return
 	}
-	fmt.Printf("BENCHv1\t%s\t%s\t%s\n", role, kind, b)
+	fmt.Printf("BENCHv1\t%s\t%s\n", role, b)
 }
