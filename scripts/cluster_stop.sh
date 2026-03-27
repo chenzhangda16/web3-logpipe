@@ -26,7 +26,7 @@ TS=$(date '+%Y%m%d_%H%M%S')
 
 : > ./logs/$MODE/reset.latest.log
 
-#./scripts/$MODE/logview.sh stop >/dev/null 2>&1 || true
+./scripts/$MODE/logview.sh stop >/dev/null 2>&1 || true
 ./scripts/$MODE/logtail.sh stop all >/dev/null 2>&1 || true
 
 FULL_RESET=1 ./scripts/$MODE/factory_reset.sh \

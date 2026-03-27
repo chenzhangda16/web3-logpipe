@@ -23,10 +23,6 @@ EOF
   exit 1
 }
 
-logview_run_log() {
-  echo "$(logview_mode_root)/logview.latest.log"
-}
-
 tmux_has_session() {
   local session="${1:?session required}"
   tmux has-session -t "$session" 2>/dev/null
@@ -39,7 +35,7 @@ tmux_kill_session_if_exists() {
 }
 
 viewer_script_path() {
-  echo "./scripts/cluster/logview_viewer.sh"
+  logview_viewer_script_path
 }
 
 viewer_cmd_single() {
@@ -67,43 +63,95 @@ viewer_cmd_merge() {
 ensure_tmux_session_single() {
   local session="${1:?session required}"
   local service="${2:?service required}"
+  local log_file
+  log_file="$(logview_dispatch_latest_log)"
 
   if tmux_has_session "$session"; then
     return 0
   fi
 
-  tmux new-session -d -s "$session" -n "$LOGVIEW_WINDOW" "$(viewer_cmd_single "$service")"
+  tmux new-session -d -s "$session" -n "$LOGVIEW_WINDOW" \
+    "bash -lc '$(viewer_cmd_single "$service")' 2>>'$log_file'"
 }
 
 ensure_tmux_session_merge() {
   local session="${1:?session required}"
+  local log_file
+  log_file="$(logview_dispatch_latest_log)"
 
   if tmux_has_session "$session"; then
     return 0
   fi
 
-  tmux new-session -d -s "$session" -n "$LOGVIEW_WINDOW" "$(viewer_cmd_merge)"
+  tmux new-session -d -s "$session" -n "$LOGVIEW_WINDOW" \
+    "bash -lc '$(viewer_cmd_merge)' 2>>'$log_file'"
+}
+
+start_logview_dispatcher() {
+  local pid_file pid log_file
+  pid_file="$(logview_dispatch_pid_file)"
+  log_file="$(logview_dispatch_latest_log)"
+
+  if [[ -f "$pid_file" ]]; then
+    pid="$(cat "$pid_file" 2>/dev/null || true)"
+    if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+      return 0
+    fi
+    rm -f "$pid_file"
+  fi
+
+  nohup "$(logview_dispatch_script_path)" >>"$log_file" 2>&1 &
+  echo $! > "$pid_file"
+}
+
+stop_logview_dispatcher() {
+  local pid_file pid
+  pid_file="$(logview_dispatch_pid_file)"
+
+  [[ -f "$pid_file" ]] || return 0
+
+  pid="$(cat "$pid_file" 2>/dev/null || true)"
+  if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+    kill "$pid" 2>/dev/null || true
+
+    local i
+    for i in {1..20}; do
+      kill -0 "$pid" 2>/dev/null || break
+      sleep 0.1
+    done
+
+    if kill -0 "$pid" 2>/dev/null; then
+      kill -9 "$pid" 2>/dev/null || true
+    fi
+  fi
+
+  rm -f "$pid_file"
 }
 
 start_split() {
   ensure_logview_dirs
+  prepare_logview_dispatch_logs
   create_logview_fifos
 
   ensure_tmux_session_single "$LOGVIEW_FETCHER_SESSION" "fetcher"
   ensure_tmux_session_single "$LOGVIEW_PROCESSOR_SESSION" "processor"
+  start_logview_dispatcher
 }
 
 start_merge() {
   ensure_logview_dirs
+  prepare_logview_dispatch_logs
   create_logview_fifos
 
   ensure_tmux_session_merge "$LOGVIEW_MERGE_SESSION"
 }
 
 stop_all() {
+  stop_logview_dispatcher || true
   tmux_kill_session_if_exists "$LOGVIEW_FETCHER_SESSION" || true
   tmux_kill_session_if_exists "$LOGVIEW_PROCESSOR_SESSION" || true
   tmux_kill_session_if_exists "$LOGVIEW_MERGE_SESSION" || true
+  remove_logview_fifos || true
 }
 
 status_one() {
@@ -119,6 +167,19 @@ status_all() {
   status_one "$LOGVIEW_FETCHER_SESSION"
   status_one "$LOGVIEW_PROCESSOR_SESSION"
   status_one "$LOGVIEW_MERGE_SESSION"
+
+  local pid_file pid
+  pid_file="$(logview_dispatch_pid_file)"
+  if [[ -f "$pid_file" ]]; then
+    pid="$(cat "$pid_file" 2>/dev/null || true)"
+    if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+      echo "up   dispatcher ($pid)"
+    else
+      echo "down dispatcher"
+    fi
+  else
+    echo "down dispatcher"
+  fi
 }
 
 attach_target() {

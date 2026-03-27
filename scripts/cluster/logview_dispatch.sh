@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
+cleanup() {
+  trap - EXIT TERM INT PIPE
+  exec 31>&- 32>&- || true
+}
+
 trap '' PIPE
+trap cleanup EXIT TERM INT
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")"/.. && pwd)/cluster/lib/_logview.sh"
 
@@ -25,15 +31,29 @@ route_line() {
   [[ -n "$line" ]] || return 0
   [[ "$line" == "==>"*"<==" ]] && return 0
 
-  local ver svc kind json
-  IFS=$'\t' read -r ver svc kind json _ <<< "$line"
+  local ver svc json _
+  IFS=$'\t' read -r ver svc json _ <<< "$line"
 
   [[ "$ver" == "BENCHv1" ]] || return 0
-  [[ "$kind" == "frame" ]] || return 0
 
   case "$svc" in
-    fetcher)   write_fifo_line "fetcher.frame" "$line" ;;
-    processor) write_fifo_line "processor.frame" "$line" ;;
+    fetcher)   write_fifo_line "fetcher.frame" "$json" ;;
+    processor) write_fifo_line "processor.frame" "$json" ;;
     *) return 0 ;;
   esac
 }
+
+main() {
+  open_fifo_writers
+
+  files=()
+  for svc in "${SERVICES[@]}"; do
+    files+=("./logs/cluster/$svc.latest.log")
+  done
+
+  while IFS= read -r line; do
+    route_line "$line"
+  done < <(tail -n0 -F -q "${files[@]}")
+}
+
+main "$@"

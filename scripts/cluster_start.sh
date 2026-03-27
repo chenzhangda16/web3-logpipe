@@ -19,7 +19,7 @@ TS="$(date '+%Y%m%d_%H%M%S')"
 : > "./logs/$MODE/writer.latest.log"
 
 # 停旧
-#./scripts/$MODE/logview.sh stop >/dev/null 2>&1 || true
+./scripts/$MODE/logview.sh stop >/dev/null 2>&1 || true
 ./scripts/$MODE/logtail.sh stop all >/dev/null 2>&1 || true
 
 # 起核心系统
@@ -27,9 +27,8 @@ nohup "./scripts/$MODE/logpipe.sh" start \
   2>&1 | tee -a "./logs/$MODE/run.latest.log" "./logs/$MODE/run.start.$TS.log" &
 
 # logview (experimental; keep current foreground console unchanged)
-# sleep 1
-# nohup "./scripts/$MODE/logview.sh" start --mode split \
-#   >> "./logs/$MODE/run.latest.log" 2>&1 &
+#sleep 1
+nohup "./scripts/$MODE/logview.sh" start --mode split >/dev/null 2>&1 &
 
 # 主控制台
 "./scripts/$MODE/logtail.sh" interactive --start-all \
