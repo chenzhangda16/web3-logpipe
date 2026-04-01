@@ -1,6 +1,11 @@
 package app
 
-import tea "github.com/charmbracelet/bubbletea"
+import (
+	"context"
+	"errors"
+
+	tea "github.com/charmbracelet/bubbletea"
+)
 
 const (
 	mouseWheelStep = 3
@@ -20,10 +25,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !m.paused {
 			m.appendRow(msg.Row)
 		}
-		return m, m.readProcCmd()
+		return m, m.waitProcMsgCmd()
 
 	case procErrMsg:
-		if msg.Err != nil {
+		if msg.Err != nil && !errors.Is(msg.Err, context.Canceled) {
 			m.lastErr = msg.Err.Error()
 		}
 		return m, nil
@@ -94,7 +99,7 @@ func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	m.mouseZone = m.mouseZoneName(msg.X, msg.Y)
 	m.hoverScrollbar = m.isScrollbarHit(msg.X, msg.Y)
 
-	// 先处理 release：无论松在哪，只要左键松开就停 hold
+	// 松开：停止 hold
 	if msg.Action == tea.MouseActionRelease {
 		if m.hold.Active {
 			m.hold = stopHold()
@@ -109,7 +114,7 @@ func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	if m.isScrollbarHit(msg.X, msg.Y) {
 		switch msg.Button {
 		case tea.MouseButtonLeft:
-			// Press: 启动长按状态，并立即执行一次
+			// Press：启动长按
 			if msg.Action == tea.MouseActionPress {
 				if m.isScrollbarTopHot(msg.Y) {
 					m.topRow = 0
@@ -123,13 +128,13 @@ func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 					return m, holdTickCmd()
 				}
 
-				// 中间区域仍按单击 seek
+				// 中间：seek（无长按）
 				m.seekFromScrollbarY(msg.Y)
 				return m, nil
 			}
 
-			// 如果终端没有明确的 Press/Release 语义，退化到单击行为
-			if msg.Action == tea.MouseActionMotion || msg.Action == tea.MouseActionUnspecified {
+			// fallback：如果某些终端不给 press，只触发一次
+			if msg.Action == 0 {
 				if m.isScrollbarTopHot(msg.Y) {
 					m.topRow = 0
 					m.follow = false

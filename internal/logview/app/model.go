@@ -25,6 +25,9 @@ type Model struct {
 	fifoPath string
 	lastErr  string
 
+	procCh chan bench.ProcJson
+	errCh  chan error
+
 	mouseZone      string
 	hoverScrollbar bool
 	hold           holdState
@@ -37,6 +40,7 @@ type Model struct {
 	schemaRoot   *schema.Node
 	schemaLeaves []*schema.Leaf
 	layoutRoot   *schema.LayoutNode
+	layoutMeta   schema.LayoutMeta
 	styler       *render.Styler
 }
 
@@ -51,21 +55,38 @@ func NewModel(fifoPath string) (Model, error) {
 	}
 
 	schema.AssignLeafX(leaves, 1)
-	layout := schema.BuildLayoutTree(root)
+	layoutRoot, layoutMeta := schema.BuildLayoutTree(root)
 
 	ctx, cancel := context.WithCancel(context.Background())
 
-	return Model{
+	m := Model{
 		follow:       true,
 		ctx:          ctx,
 		cancel:       cancel,
 		fifoPath:     fifoPath,
+		procCh:       make(chan bench.ProcJson, 128),
+		errCh:        make(chan error, 1),
 		rows:         store.NewRowStore[bench.ProcJson](1000, 800),
 		schemaRoot:   root,
 		schemaLeaves: leaves,
-		layoutRoot:   layout,
+		layoutRoot:   layoutRoot,
+		layoutMeta:   layoutMeta,
 		styler:       render.NewStyler(),
-	}, nil
+	}
+
+	go func() {
+		defer close(m.procCh)
+
+		if err := source.ReadProcJSON(m.ctx, m.fifoPath, m.procCh); err != nil {
+			select {
+			case <-m.ctx.Done():
+			case m.errCh <- err:
+			default:
+			}
+		}
+	}()
+
+	return m, nil
 }
 
 func Run() error {
@@ -83,7 +104,7 @@ func Run() error {
 }
 
 func (m Model) Init() tea.Cmd {
-	return m.readProcCmd()
+	return m.waitProcMsgCmd()
 }
 
 func (m *Model) visibleRows() int {
@@ -133,38 +154,25 @@ func (m *Model) appendRow(v bench.ProcJson) {
 	}
 }
 
-func (m Model) readProcCmd() tea.Cmd {
+func (m Model) waitProcMsgCmd() tea.Cmd {
 	return func() tea.Msg {
-		out := make(chan bench.ProcJson, 1)
-		errCh := make(chan error, 1)
-
-		go func() {
-			errCh <- source.ReadProcJSON(m.ctx, m.fifoPath, out)
-		}()
-
 		select {
 		case <-m.ctx.Done():
 			return procErrMsg{Err: m.ctx.Err()}
-		case err := <-errCh:
+
+		case err := <-m.errCh:
 			if err != nil {
 				return procErrMsg{Err: err}
 			}
 			return nil
-		case row := <-out:
+
+		case row, ok := <-m.procCh:
+			if !ok {
+				return nil
+			}
 			return procRowMsg{Row: row}
 		}
 	}
-}
-
-func (m *Model) headerRows() int {
-	if m.layoutRoot == nil {
-		return 0
-	}
-	return len(schema.RenderTreeHeader(
-		m.layoutRoot,
-		m.schemaLeaves,
-		schema.DefaultHeaderRenderConfig(),
-	))
 }
 
 func (m *Model) statusRows() int {
@@ -172,7 +180,7 @@ func (m *Model) statusRows() int {
 }
 
 func (m *Model) bodyRows() int {
-	h := m.height - m.headerRows() - m.statusRows()
+	h := m.height - m.layoutMeta.HeaderRows - m.statusRows()
 	if h < 1 {
 		return 1
 	}
@@ -180,7 +188,7 @@ func (m *Model) bodyRows() int {
 }
 
 func (m *Model) bodyYRange() (startY, endY int) {
-	startY = m.headerRows()
+	startY = m.layoutMeta.HeaderRows
 	endY = startY + m.bodyRows() - 1
 	return
 }
@@ -192,7 +200,7 @@ func (m *Model) statusYRange() (startY, endY int) {
 }
 
 func (m *Model) isHeaderY(y int) bool {
-	return y >= 0 && y < m.headerRows()
+	return y >= 0 && y < m.layoutMeta.HeaderRows
 }
 
 func (m *Model) isStatusY(y int) bool {

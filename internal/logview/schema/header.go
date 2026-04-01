@@ -195,7 +195,7 @@ func RenderTreeHeaderWithTheme(
 		return nil
 	}
 
-	maxDepth := HeaderMaxDepth(root)
+	maxDepth := root.SubtreeMaxDepth
 	if maxDepth <= 0 {
 		maxDepth = 1
 	}
@@ -314,7 +314,7 @@ func drawInnerDividers(
 	if y0 < 0 {
 		y0 = 0
 	}
-	y1 := minInt(canvas.height()-1, HeaderMaxDepth(n)-1)
+	y1 := minInt(canvas.height()-1, n.SubtreeMaxDepth-1)
 	if y1 < y0 {
 		y1 = y0
 	}

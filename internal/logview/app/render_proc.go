@@ -7,18 +7,27 @@ import (
 
 	"github.com/chenzhangda16/web3-logpipe/internal/logpipe/bench"
 	"github.com/chenzhangda16/web3-logpipe/internal/logview/render"
+	"github.com/chenzhangda16/web3-logpipe/internal/logview/schema"
 )
 
 func (m *Model) renderProcRow(row bench.ProcJson) string {
+	rv := reflect.ValueOf(row)
 	cells := make([]string, 0, len(m.schemaLeaves))
 
 	for _, lf := range m.schemaLeaves {
-		str, raw := extractAndFormat(row, lf.Path)
+		val := schema.ResolveLeafValue(rv, lf)
 
-		style := m.styler.Style(lf.Path, raw)
-		str = style.Render(str)
+		s := ""
+		var raw any = nil
+		if val.IsValid() {
+			raw = val.Interface()
+			s = lf.Format(val)
+		}
 
-		cells = append(cells, render.PadCell(str, lf.Width, lf.Align))
+		style := m.styler.Style(lf.PathKey, raw)
+		s = style.Render(s)
+
+		cells = append(cells, render.PadCell(s, lf.Width, lf.Align))
 	}
 
 	return strings.Join(cells, " ")

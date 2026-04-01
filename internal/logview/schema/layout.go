@@ -1,14 +1,19 @@
 package schema
 
+type LayoutMeta struct {
+	HeaderRows int
+}
+
 type LayoutNode struct {
-	Name     string
-	Path     []string
-	Depth    int
-	X0       int
-	X1       int
-	Mid      int
-	Children []*LayoutNode
-	Leaf     *Leaf
+	Name            string
+	Path            []string
+	Depth           int
+	SubtreeMaxDepth int
+	X0              int
+	X1              int
+	Mid             int
+	Children        []*LayoutNode
+	Leaf            *Leaf
 }
 
 func AssignLeafX(leaves []*Leaf, gap int) {
@@ -20,20 +25,37 @@ func AssignLeafX(leaves []*Leaf, gap int) {
 	}
 }
 
-func BuildLayoutTree(n *Node) *LayoutNode {
+func BuildLayoutTree(n *Node) (*LayoutNode, LayoutMeta) {
+	root := buildLayoutTree(n)
+	meta := LayoutMeta{}
+	if root != nil {
+		meta.HeaderRows = root.SubtreeMaxDepth
+	}
+	return root, meta
+}
+
+func buildLayoutTree(n *Node) *LayoutNode {
 	if n == nil {
 		return nil
 	}
 
 	ln := &LayoutNode{
-		Name:  n.Name,
-		Path:  appendCopy(nil, n.Path...),
-		Leaf:  n.Leaf,
-		Depth: len(n.Path),
+		Name:            n.Name,
+		Path:            appendCopy(nil, n.Path...),
+		Leaf:            n.Leaf,
+		Depth:           len(n.Path),
+		SubtreeMaxDepth: len(n.Path),
 	}
 
 	for _, ch := range n.Children {
-		ln.Children = append(ln.Children, BuildLayoutTree(ch))
+		child := buildLayoutTree(ch)
+		if child == nil {
+			continue
+		}
+		ln.Children = append(ln.Children, child)
+		if child.SubtreeMaxDepth > ln.SubtreeMaxDepth {
+			ln.SubtreeMaxDepth = child.SubtreeMaxDepth
+		}
 	}
 
 	if n.Leaf != nil {
@@ -52,7 +74,7 @@ func BuildLayoutTree(n *Node) *LayoutNode {
 	return ln
 }
 
-func HeaderMaxDepth(root *LayoutNode) int {
+func DebugDFS(root *LayoutNode) int {
 	if root == nil {
 		return 0
 	}
