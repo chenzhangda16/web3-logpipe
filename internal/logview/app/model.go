@@ -18,7 +18,7 @@ type Config struct {
 	Schema   string
 }
 
-type Model struct {
+type Model[T any] struct {
 	width  int
 	height int
 
@@ -31,8 +31,8 @@ type Model struct {
 	fifoPath string
 	lastErr  string
 
-	procCh chan bench.ProcJson
-	errCh  chan error
+	rowCh chan T
+	errCh chan error
 
 	mouseZone      string
 	hoverScrollbar bool
@@ -41,63 +41,61 @@ type Model struct {
 	lastSeekTsMs  int64
 	lastSeekRatio float64
 
-	rows *store.RowStore[bench.ProcJson]
+	rows *store.RowStore[T]
 
 	schemaRoot   *schema.Node
 	schemaLeaves []*schema.Leaf
 	layoutRoot   *schema.LayoutNode
 	layoutMeta   schema.LayoutMeta
 	styler       *render.Styler
+
+	rowTsMs func(T) int64
+	rowTick func(T) int64
 }
 
-func NewModel(cfg Config) (Model, error) {
-	var (
-		root       *schema.Node
-		leaves     []*schema.Leaf
-		layoutRoot *schema.LayoutNode
-		layoutMeta schema.LayoutMeta
-		err        error
+func newModel[T any](
+	cfg Config,
+	sample T,
+	mapKeyProvider schema.MapKeyProvider,
+	readFn func(context.Context, string, chan<- T) error,
+	rowTsMs func(T) int64,
+	rowTick func(T) int64,
+) (Model[T], error) {
+	root, leaves, err := schema.BuildSchemaTreeWithKeys(
+		sample,
+		schema.DefaultOverrideSet(),
+		mapKeyProvider,
 	)
-
-	switch cfg.Schema {
-	case "", "proc":
-		root, leaves, err = schema.BuildSchemaTreeWithKeys(
-			bench.ProcJson{},
-			schema.DefaultOverrideSet(),
-			schema.ProcMapKeyProvider(),
-		)
-		if err != nil {
-			return Model{}, err
-		}
-
-	default:
-		return Model{}, fmt.Errorf("unsupported schema: %s", cfg.Schema)
+	if err != nil {
+		return Model[T]{}, err
 	}
 
 	schema.AssignLeafX(leaves, 1)
-	layoutRoot, layoutMeta = schema.BuildLayoutTree(root)
+	layoutRoot, layoutMeta := schema.BuildLayoutTree(root)
 
 	ctx, cancel := context.WithCancel(context.Background())
 
-	m := Model{
+	m := Model[T]{
 		follow:       true,
 		ctx:          ctx,
 		cancel:       cancel,
 		fifoPath:     cfg.FIFOPath,
-		procCh:       make(chan bench.ProcJson, 128),
+		rowCh:        make(chan T, 128),
 		errCh:        make(chan error, 1),
-		rows:         store.NewRowStore[bench.ProcJson](1000, 800),
+		rows:         store.NewRowStore[T](1000, 800),
 		schemaRoot:   root,
 		schemaLeaves: leaves,
 		layoutRoot:   layoutRoot,
 		layoutMeta:   layoutMeta,
 		styler:       render.NewStyler(),
+		rowTsMs:      rowTsMs,
+		rowTick:      rowTick,
 	}
 
 	go func() {
-		defer close(m.procCh)
+		defer close(m.rowCh)
 
-		if err := source.ReadProcJSON(m.ctx, m.fifoPath, m.procCh); err != nil {
+		if err := readFn(m.ctx, m.fifoPath, m.rowCh); err != nil {
 			select {
 			case <-m.ctx.Done():
 			case m.errCh <- err:
@@ -107,6 +105,34 @@ func NewModel(cfg Config) (Model, error) {
 	}()
 
 	return m, nil
+}
+
+func NewModel(cfg Config) (tea.Model, error) {
+	switch cfg.Schema {
+
+	case "", "proc":
+		return newModel(
+			cfg,
+			bench.ProcJson{},
+			schema.ProcMapKeyProvider(),
+			source.ReadJSON[bench.ProcJson],
+			func(v bench.ProcJson) int64 { return v.TsMs },
+			func(v bench.ProcJson) int64 { return v.Tick },
+		)
+
+	case "fetch":
+		return newModel(
+			cfg,
+			bench.FetchJson{},
+			schema.FetchMapKeyProvider(),
+			source.ReadJSON[bench.FetchJson],
+			func(v bench.FetchJson) int64 { return v.TsMs },
+			func(v bench.FetchJson) int64 { return v.Tick },
+		)
+
+	default:
+		return nil, fmt.Errorf("unsupported schema: %s", cfg.Schema)
+	}
 }
 
 func Run(cfg Config) error {
@@ -120,15 +146,15 @@ func Run(cfg Config) error {
 	return err
 }
 
-func (m Model) Init() tea.Cmd {
-	return m.waitProcMsgCmd()
+func (m Model[T]) Init() tea.Cmd {
+	return m.waitRowMsgCmd()
 }
 
-func (m *Model) visibleRows() int {
+func (m *Model[T]) visibleRows() int {
 	return m.bodyRows()
 }
 
-func (m *Model) maxTopRow() int {
+func (m *Model[T]) maxTopRow() int {
 	maxRow := m.rows.Len() - m.visibleRows()
 	if maxRow < 0 {
 		return 0
@@ -136,12 +162,12 @@ func (m *Model) maxTopRow() int {
 	return maxRow
 }
 
-func (m *Model) scrollToBottom() {
+func (m *Model[T]) scrollToBottom() {
 	m.topRow = m.maxTopRow()
 	m.follow = true
 }
 
-func (m *Model) scrollBy(n int) {
+func (m *Model[T]) scrollBy(n int) {
 	m.topRow += n
 
 	if m.topRow < 0 {
@@ -151,52 +177,42 @@ func (m *Model) scrollBy(n int) {
 		m.topRow = m.maxTopRow()
 	}
 
-	if m.topRow == m.maxTopRow() {
-		m.follow = true
-	} else {
-		m.follow = false
-	}
+	m.follow = (m.topRow == m.maxTopRow())
 }
 
-func (m *Model) appendRow(v bench.ProcJson) {
+func (m *Model[T]) appendRow(v T) {
 	dropped := m.rows.Append(v)
-	if dropped > 0 {
+
+	if m.follow {
+		m.topRow = m.maxTopRow()
+	} else if dropped > 0 {
 		m.topRow -= dropped
 		if m.topRow < 0 {
 			m.topRow = 0
 		}
 	}
-	if m.follow {
-		m.topRow = m.maxTopRow()
-	}
 }
 
-func (m Model) waitProcMsgCmd() tea.Cmd {
+func (m Model[T]) waitRowMsgCmd() tea.Cmd {
 	return func() tea.Msg {
 		select {
-		case <-m.ctx.Done():
-			return procErrMsg{Err: m.ctx.Err()}
-
-		case err := <-m.errCh:
-			if err != nil {
-				return procErrMsg{Err: err}
-			}
-			return nil
-
-		case row, ok := <-m.procCh:
+		case row, ok := <-m.rowCh:
 			if !ok {
 				return nil
 			}
-			return procRowMsg{Row: row}
+			return rowMsg[T]{Row: row}
+
+		case err := <-m.errCh:
+			return errMsg{Err: err}
 		}
 	}
 }
 
-func (m *Model) statusRows() int {
+func (m *Model[T]) statusRows() int {
 	return 1
 }
 
-func (m *Model) bodyRows() int {
+func (m *Model[T]) bodyRows() int {
 	h := m.height - m.layoutMeta.HeaderRows - m.statusRows()
 	if h < 1 {
 		return 1
@@ -204,38 +220,37 @@ func (m *Model) bodyRows() int {
 	return h
 }
 
-func (m *Model) bodyYRange() (startY, endY int) {
+func (m *Model[T]) bodyYRange() (startY, endY int) {
 	startY = m.layoutMeta.HeaderRows
 	endY = startY + m.bodyRows() - 1
 	return
 }
 
-func (m *Model) statusYRange() (startY, endY int) {
+func (m *Model[T]) statusYRange() (startY, endY int) {
 	endY = m.height - 1
 	startY = endY - m.statusRows() + 1
 	return
 }
 
-func (m *Model) isHeaderY(y int) bool {
+func (m *Model[T]) isHeaderY(y int) bool {
 	return y >= 0 && y < m.layoutMeta.HeaderRows
 }
 
-func (m *Model) isStatusY(y int) bool {
+func (m *Model[T]) isStatusY(y int) bool {
 	sy0, sy1 := m.statusYRange()
 	return y >= sy0 && y <= sy1
 }
 
-func (m *Model) isBodyY(y int) bool {
+func (m *Model[T]) isBodyY(y int) bool {
 	by0, by1 := m.bodyYRange()
 	return y >= by0 && y <= by1
 }
 
-func (m *Model) scrollbarWidth() int {
-	// 当前先固定 1 列
+func (m *Model[T]) scrollbarWidth() int {
 	return 1
 }
 
-func (m *Model) bodyContentWidth() int {
+func (m *Model[T]) bodyContentWidth() int {
 	w := m.width - m.scrollbarWidth()
 	if w < 0 {
 		return 0
@@ -243,7 +258,7 @@ func (m *Model) bodyContentWidth() int {
 	return w
 }
 
-func (m *Model) scrollbarXRange() (startX, endX int) {
+func (m *Model[T]) scrollbarXRange() (startX, endX int) {
 	if m.width <= 0 {
 		return -1, -1
 	}
@@ -255,7 +270,7 @@ func (m *Model) scrollbarXRange() (startX, endX int) {
 	return
 }
 
-func (m *Model) bodyContentXRange() (startX, endX int) {
+func (m *Model[T]) bodyContentXRange() (startX, endX int) {
 	startX = 0
 	endX = m.bodyContentWidth() - 1
 	if endX < startX {
@@ -264,25 +279,25 @@ func (m *Model) bodyContentXRange() (startX, endX int) {
 	return
 }
 
-func (m *Model) isScrollbarX(x int) bool {
+func (m *Model[T]) isScrollbarX(x int) bool {
 	sx0, sx1 := m.scrollbarXRange()
 	return x >= sx0 && x <= sx1
 }
 
-func (m *Model) isBodyContentX(x int) bool {
+func (m *Model[T]) isBodyContentX(x int) bool {
 	cx0, cx1 := m.bodyContentXRange()
 	return x >= cx0 && x <= cx1
 }
 
-func (m *Model) isScrollbarHit(x, y int) bool {
+func (m *Model[T]) isScrollbarHit(x, y int) bool {
 	return m.isBodyY(y) && m.isScrollbarX(x)
 }
 
-func (m *Model) isBodyContentHit(x, y int) bool {
+func (m *Model[T]) isBodyContentHit(x, y int) bool {
 	return m.isBodyY(y) && m.isBodyContentX(x)
 }
 
-func (m *Model) mouseZoneName(x, y int) string {
+func (m *Model[T]) mouseZoneName(x, y int) string {
 	switch {
 	case m.isHeaderY(y):
 		return "header"
@@ -299,12 +314,12 @@ func (m *Model) mouseZoneName(x, y int) string {
 	}
 }
 
-func (m *Model) bodyLocalY(y int) int {
+func (m *Model[T]) bodyLocalY(y int) int {
 	by0, _ := m.bodyYRange()
 	return y - by0
 }
 
-func (m *Model) isScrollbarBottomHot(y int) bool {
+func (m *Model[T]) isScrollbarBottomHot(y int) bool {
 	if !m.isBodyY(y) {
 		return false
 	}
@@ -313,7 +328,7 @@ func (m *Model) isScrollbarBottomHot(y int) bool {
 	return sm.isBottomHot(localY)
 }
 
-func (m *Model) isScrollbarTopHot(y int) bool {
+func (m *Model[T]) isScrollbarTopHot(y int) bool {
 	if !m.isBodyY(y) {
 		return false
 	}
@@ -322,7 +337,7 @@ func (m *Model) isScrollbarTopHot(y int) bool {
 	return sm.isTopHot(localY)
 }
 
-func (m *Model) seekToRatio(r float64) {
+func (m *Model[T]) seekToRatio(r float64) {
 	if r < 0 {
 		r = 0
 	}
@@ -337,12 +352,11 @@ func (m *Model) seekToRatio(r float64) {
 		return
 	}
 
-	// 先算“目标行”，再把它放到屏幕中间偏上
 	targetRow := int(r * float64(m.rows.Len()-1))
 	m.seekToRow(targetRow)
 }
 
-func (m *Model) seekToRow(targetRow int) {
+func (m *Model[T]) seekToRow(targetRow int) {
 	if m.rows.Len() <= 0 {
 		m.topRow = 0
 		m.follow = true
@@ -359,7 +373,6 @@ func (m *Model) seekToRow(targetRow int) {
 	vis := m.visibleRows()
 	anchor := vis / 2
 	if anchor > 2 {
-		// 稍微偏上，给下方多一点空间看后续变化
 		anchor = vis / 3
 	}
 
@@ -372,14 +385,10 @@ func (m *Model) seekToRow(targetRow int) {
 	}
 
 	m.topRow = top
-	if m.topRow == m.maxTopRow() {
-		m.follow = true
-	} else {
-		m.follow = false
-	}
+	m.follow = (m.topRow == m.maxTopRow())
 }
 
-func (m *Model) seekFromScrollbarY(y int) {
+func (m *Model[T]) seekFromScrollbarY(y int) {
 	if !m.isBodyY(y) {
 		return
 	}
@@ -389,7 +398,7 @@ func (m *Model) seekFromScrollbarY(y int) {
 	m.seekToTimeRatio(r)
 }
 
-func (m *Model) seekToTimeRatio(r float64) {
+func (m *Model[T]) seekToTimeRatio(r float64) {
 	if r < 0 {
 		r = 0
 	}
@@ -406,7 +415,7 @@ func (m *Model) seekToTimeRatio(r float64) {
 		return
 	}
 	if n == 1 {
-		m.lastSeekTsMs = m.rows.At(0).TsMs
+		m.lastSeekTsMs = m.rowTsMs(m.rows.At(0))
 		m.lastSeekRatio = r
 		m.seekToRow(0)
 		return
@@ -415,10 +424,9 @@ func (m *Model) seekToTimeRatio(r float64) {
 	first := m.rows.At(0)
 	last := m.rows.At(m.rows.LastIndex())
 
-	minTs := first.TsMs
-	maxTs := last.TsMs
+	minTs := m.rowTsMs(first)
+	maxTs := m.rowTsMs(last)
 
-	// 时间戳无效或不递增时，退化成按行 seek
 	if minTs <= 0 || maxTs <= 0 || maxTs <= minTs {
 		m.lastSeekTsMs = 0
 		m.lastSeekRatio = r
@@ -434,7 +442,7 @@ func (m *Model) seekToTimeRatio(r float64) {
 	m.seekToRow(idx)
 }
 
-func (m *Model) findFirstRowAtOrAfterTs(targetTs int64) int {
+func (m *Model[T]) findFirstRowAtOrAfterTs(targetTs int64) int {
 	n := m.rows.Len()
 	if n <= 0 {
 		return 0
@@ -443,7 +451,7 @@ func (m *Model) findFirstRowAtOrAfterTs(targetTs int64) int {
 	lo, hi := 0, n
 	for lo < hi {
 		mid := lo + (hi-lo)/2
-		ts := m.rows.At(mid).TsMs
+		ts := m.rowTsMs(m.rows.At(mid))
 		if ts < targetTs {
 			lo = mid + 1
 		} else {
@@ -457,7 +465,7 @@ func (m *Model) findFirstRowAtOrAfterTs(targetTs int64) int {
 	return lo
 }
 
-func (m *Model) windowTimeRange() (startTsMs, endTsMs int64, ok bool) {
+func (m *Model[T]) windowTimeRange() (startTsMs, endTsMs int64, ok bool) {
 	if m.rows.Len() == 0 {
 		return 0, 0, false
 	}
@@ -478,7 +486,7 @@ func (m *Model) windowTimeRange() (startTsMs, endTsMs int64, ok bool) {
 		hi = m.rows.Len() - 1
 	}
 
-	startTsMs = m.rows.At(lo).TsMs
-	endTsMs = m.rows.At(hi).TsMs
+	startTsMs = m.rowTsMs(m.rows.At(lo))
+	endTsMs = m.rowTsMs(m.rows.At(hi))
 	return startTsMs, endTsMs, true
 }

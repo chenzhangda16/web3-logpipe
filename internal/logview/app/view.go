@@ -3,11 +3,10 @@ package app
 import (
 	"strings"
 
-	"github.com/chenzhangda16/web3-logpipe/internal/logview/render"
 	"github.com/chenzhangda16/web3-logpipe/internal/logview/schema"
 )
 
-func (m Model) View() string {
+func (m Model[T]) View() string {
 	if m.schemaRoot == nil {
 		return "loading..."
 	}
@@ -36,7 +35,7 @@ func (m Model) View() string {
 	bodyLines := make([]string, 0, bodyRows)
 	if lo < hi {
 		for _, row := range m.rows.Slice(lo, hi) {
-			bodyLines = append(bodyLines, m.renderProcRow(row))
+			bodyLines = append(bodyLines, m.renderRowGeneric(row))
 		}
 	}
 
@@ -58,14 +57,6 @@ func (m Model) View() string {
 	lines = append(lines, bodyWithScrollbar...)
 
 	// 状态栏固定底部
-	lines = append(lines, renderStatusLine(m))
+	lines = append(lines, m.renderStatusLine())
 	return strings.Join(lines, "\n")
-}
-
-func padLeafCell(s string, lf *schema.Leaf) string {
-	return render.PadCell(s, lf.Width, lf.Align)
-}
-
-func joinCells(cells []string) string {
-	return strings.Join(cells, " ")
 }

@@ -16,7 +16,7 @@ type scrollbarMetrics struct {
 	ThumbHeight int
 }
 
-func (m Model) buildScrollbarMetrics() scrollbarMetrics {
+func (m Model[T]) buildScrollbarMetrics() scrollbarMetrics {
 	bodyH := m.visibleRows()
 	total := m.rows.Len()
 	vis := m.visibleRows()

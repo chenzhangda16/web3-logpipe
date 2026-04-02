@@ -35,7 +35,7 @@ type statusInfo struct {
 	seekRatio    float64
 }
 
-func (m Model) buildStatus() statusInfo {
+func (m Model[T]) buildStatus() statusInfo {
 	info := statusInfo{
 		rows:      m.rows.Len(),
 		topRow:    m.topRow,
@@ -57,8 +57,8 @@ func (m Model) buildStatus() statusInfo {
 
 	if m.rows.Len() > 0 {
 		last := m.rows.At(m.rows.LastIndex())
-		info.latestTick = last.Tick
-		info.latestTsMs = last.TsMs
+		info.latestTick = m.rowTick(last)
+		info.latestTsMs = m.rowTsMs(last)
 	}
 
 	if m.rows.Len() == 0 {
@@ -87,7 +87,7 @@ func (m Model) buildStatus() statusInfo {
 	return info
 }
 
-func renderStatusLine(m Model) string {
+func (m Model[T]) renderStatusLine() string {
 	info := m.buildStatus()
 
 	modeText, modeStyle := statusModeStyle(info.mode)

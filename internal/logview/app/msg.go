@@ -2,10 +2,14 @@ package app
 
 import "github.com/chenzhangda16/web3-logpipe/internal/logpipe/bench"
 
-type procRowMsg struct {
-	Row bench.ProcJson
+type rowMsg[T any] struct {
+	Row T
 }
 
-type procErrMsg struct {
+type errMsg struct {
 	Err error
+}
+
+type fetchRowMsg struct {
+	Row bench.FetchJson
 }

@@ -3,11 +3,9 @@ package source
 import (
 	"context"
 	"encoding/json"
-
-	"github.com/chenzhangda16/web3-logpipe/internal/logpipe/bench"
 )
 
-func ReadProcJSON(ctx context.Context, fifoPath string, out chan<- bench.ProcJson) error {
+func ReadJSON[T any](ctx context.Context, fifoPath string, out chan<- T) error {
 	lines := make(chan []byte, 128)
 	errCh := make(chan error, 1)
 
@@ -31,16 +29,17 @@ func ReadProcJSON(ctx context.Context, fifoPath string, out chan<- bench.ProcJso
 			if !ok {
 				return nil
 			}
-			var pj bench.ProcJson
-			if err := json.Unmarshal(line, &pj); err != nil {
-				// 第一版先直接跳过坏行，不中断 viewer
+
+			var v T
+			if err := json.Unmarshal(line, &v); err != nil {
+				// 保持你原来的策略：跳过坏行
 				continue
 			}
 
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
-			case out <- pj:
+			case out <- v:
 			}
 		}
 	}

@@ -11,7 +11,7 @@ const (
 	mouseWheelStep = 3
 )
 
-func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m Model[T]) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
@@ -21,13 +21,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
-	case procRowMsg:
+	case rowMsg[T]:
 		if !m.paused {
 			m.appendRow(msg.Row)
 		}
-		return m, m.waitProcMsgCmd()
+		return m, m.waitRowMsgCmd()
 
-	case procErrMsg:
+	case errMsg:
 		if msg.Err != nil && !errors.Is(msg.Err, context.Canceled) {
 			m.lastErr = msg.Err.Error()
 		}
@@ -95,7 +95,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m Model) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+func (m Model[T]) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	m.mouseZone = m.mouseZoneName(msg.X, msg.Y)
 	m.hoverScrollbar = m.isScrollbarHit(msg.X, msg.Y)
 

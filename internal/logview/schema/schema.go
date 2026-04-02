@@ -334,6 +334,10 @@ func ProcMapKeyProvider() StaticMapKeyProvider {
 	}
 }
 
+func FetchMapKeyProvider() MapKeyProvider {
+	return nil
+}
+
 func PathKey(path []string) string {
 	return strings.Join(path, ".")
 }
