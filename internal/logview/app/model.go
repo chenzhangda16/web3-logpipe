@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"fmt"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/chenzhangda16/web3-logpipe/internal/logview/render"
@@ -11,6 +12,11 @@ import (
 	"github.com/chenzhangda16/web3-logpipe/internal/logview/source"
 	"github.com/chenzhangda16/web3-logpipe/internal/logview/store"
 )
+
+type Config struct {
+	FIFOPath string
+	Schema   string
+}
 
 type Model struct {
 	width  int
@@ -44,18 +50,32 @@ type Model struct {
 	styler       *render.Styler
 }
 
-func NewModel(fifoPath string) (Model, error) {
-	root, leaves, err := schema.BuildSchemaTreeWithKeys(
-		bench.ProcJson{},
-		schema.DefaultOverrideSet(),
-		schema.ProcMapKeyProvider(),
+func NewModel(cfg Config) (Model, error) {
+	var (
+		root       *schema.Node
+		leaves     []*schema.Leaf
+		layoutRoot *schema.LayoutNode
+		layoutMeta schema.LayoutMeta
+		err        error
 	)
-	if err != nil {
-		return Model{}, err
+
+	switch cfg.Schema {
+	case "", "proc":
+		root, leaves, err = schema.BuildSchemaTreeWithKeys(
+			bench.ProcJson{},
+			schema.DefaultOverrideSet(),
+			schema.ProcMapKeyProvider(),
+		)
+		if err != nil {
+			return Model{}, err
+		}
+
+	default:
+		return Model{}, fmt.Errorf("unsupported schema: %s", cfg.Schema)
 	}
 
 	schema.AssignLeafX(leaves, 1)
-	layoutRoot, layoutMeta := schema.BuildLayoutTree(root)
+	layoutRoot, layoutMeta = schema.BuildLayoutTree(root)
 
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -63,7 +83,7 @@ func NewModel(fifoPath string) (Model, error) {
 		follow:       true,
 		ctx:          ctx,
 		cancel:       cancel,
-		fifoPath:     fifoPath,
+		fifoPath:     cfg.FIFOPath,
 		procCh:       make(chan bench.ProcJson, 128),
 		errCh:        make(chan error, 1),
 		rows:         store.NewRowStore[bench.ProcJson](1000, 800),
@@ -89,11 +109,8 @@ func NewModel(fifoPath string) (Model, error) {
 	return m, nil
 }
 
-func Run() error {
-	// 第一版先写死；后面再改成 flag
-	fifoPath := "/tmp/logview.processor.fifo"
-
-	m, err := NewModel(fifoPath)
+func Run(cfg Config) error {
+	m, err := NewModel(cfg)
 	if err != nil {
 		return err
 	}

@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")"/.. && pwd)/cluster/lib/_logview.sh"
+
 mode=""
 service=""
 fifo=""
 fetcher_fifo=""
 processor_fifo=""
 
-reader_pid=""
+viewer_pid=""
 resume_after_int=0
 
 confirm_exit() {
@@ -32,42 +34,68 @@ confirm_exit() {
   done
 }
 
+viewer_schema_for_service() {
+  local service="${1:?service required}"
+  case "$service" in
+    processor)
+      printf 'proc\n'
+      ;;
+    fetcher)
+      printf 'fetch\n'
+      ;;
+    *)
+      echo "unknown service for schema mapping: $service" >&2
+      return 1
+      ;;
+  esac
+}
+
 run_single() {
   local service="${1:?service required}"
   local fifo="${2:?fifo required}"
+  local bin schema
 
-  printf '[viewer single] service=%s fifo=%s\n' "$service" "$fifo"
+  bin="$(logview_bin_path)"
+  schema="$(viewer_schema_for_service "$service")"
+
+  [[ -x "$bin" ]] || {
+    echo "[viewer] binary not found or not executable: $bin" >&2
+    exit 1
+  }
+
+  printf '[viewer single] service=%s schema=%s fifo=%s bin=%s\n' \
+    "$service" "$schema" "$fifo" "$bin"
 
   trap 'confirm_exit' INT
 
   while true; do
     resume_after_int=0
 
-    stdbuf -oL cat "$fifo" &
-    reader_pid=$!
+    "$bin" --fifo "$fifo" --schema "$schema" &
+    viewer_pid=$!
 
     set +e
-    wait "$reader_pid"
+    wait "$viewer_pid"
     rc=$?
     set -e
 
-    # Ctrl+C 后用户选择 n，则 reader 已被打死，需要重启
+    # Ctrl+C 后用户选择 n，则 viewer 已退出，需要重启
     if [[ "$resume_after_int" -eq 1 ]]; then
       continue
     fi
 
-    # 正常 EOF/退出，短暂等待后重连
+    # 正常退出，短暂等待后重连
     if [[ "$rc" -eq 0 ]]; then
       sleep 0.1
       continue
     fi
 
-    # cat 被信号打死（比如 Ctrl+C），但如果不是走确认继续，直接退出
+    # 被信号打死（比如 Ctrl+C）
     if [[ "$rc" -eq 130 || "$rc" -eq 131 || "$rc" -eq 143 ]]; then
       exit "$rc"
     fi
 
-    printf '[viewer] reader exited rc=%s, retrying...\n' "$rc" >&2
+    printf '[viewer] process exited rc=%s, retrying...\n' "$rc" >&2
     sleep 0.2
   done
 }
@@ -84,10 +112,10 @@ run_merge() {
     resume_after_int=0
 
     sleep 3600 &
-    reader_pid=$!
+    viewer_pid=$!
 
     set +e
-    wait "$reader_pid"
+    wait "$viewer_pid"
     rc=$?
     set -e
 

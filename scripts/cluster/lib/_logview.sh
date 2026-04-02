@@ -7,6 +7,43 @@ get_root_dir() {
   cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd
 }
 
+logview_bin_path() {
+  printf '%s/bin/cluster/logview' "$(get_root_dir)"
+}
+
+logview_build_log_path() {
+  printf '%s/logview.build.latest.log' "$(logview_log_root)"
+}
+
+build_logview_binary() {
+  local root bin log_file
+  root="$(get_root_dir)"
+  bin="$(logview_bin_path)"
+  log_file="$(logview_build_log_path)"
+
+  ensure_logview_dirs
+  mkdir -p "$(dirname "$bin")"
+
+  printf '[logview] building %s -> %s\n' "$root/cmd/logview" "$bin" >>"$log_file"
+
+  (
+    cd "$root"
+    go build -o "$bin" ./cmd/logview
+  ) >>"$log_file" 2>&1
+}
+
+ensure_logview_binary() {
+  local bin
+  bin="$(logview_bin_path)"
+
+  build_logview_binary
+
+  [[ -x "$bin" ]] || {
+    echo "[logview] build finished but binary not executable: $bin" >&2
+    return 1
+  }
+}
+
 logview_mode_root() {
   printf '%s/data/cluster/pids' "$(get_root_dir)"
 }

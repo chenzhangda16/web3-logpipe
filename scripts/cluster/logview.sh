@@ -132,6 +132,7 @@ start_split() {
   ensure_logview_dirs
   prepare_logview_dispatch_logs
   create_logview_fifos
+  ensure_logview_binary
 
   ensure_tmux_session_single "$LOGVIEW_FETCHER_SESSION" "fetcher"
   ensure_tmux_session_single "$LOGVIEW_PROCESSOR_SESSION" "processor"
@@ -142,6 +143,7 @@ start_merge() {
   ensure_logview_dirs
   prepare_logview_dispatch_logs
   create_logview_fifos
+  ensure_logview_binary
 
   ensure_tmux_session_merge "$LOGVIEW_MERGE_SESSION"
 }
