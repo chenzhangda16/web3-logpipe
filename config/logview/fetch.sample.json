@@ -1,0 +1,55 @@
+{
+  "tag": "fetcher",
+  "tick": 8,
+  "ts_ms": 1775126666611,
+  "core": {
+    "cpu_pct": 50.07466401194624,
+    "gomaxprocs": 20,
+    "goroutines": 44
+  },
+  "wire": {
+    "iface": "eth0",
+    "rx_bps": 805209.9818605955,
+    "tx_bps": 113396636.473539,
+    "rx_pct": 0.2611932241545552,
+    "tx_pct": 36.78348971825522
+  },
+  "flow": {
+    "rpc": {
+      "pps": 42,
+      "bps": 8400,
+      "ok": 42,
+      "err": 0,
+      "avg_ns": 190255435,
+      "p50_ns": 186752372,
+      "p90_ns": 207299072,
+      "p99_ns": 212671574,
+      "max_ns": 212671574
+    },
+    "blk": {
+      "enq_bps": 8600,
+      "ack_bps": 8526
+    },
+    "event": {
+      "prod_err": 0,
+      "lag_fatal": 0,
+      "ckpt_save": 1
+    },
+    "input_block": {
+      "sum_ns": 0,
+      "ev": 0,
+      "avg_ns": 0,
+      "max_ns": 0
+    },
+    "q": {
+      "req": {
+        "len": 109,
+        "cap": 4096
+      },
+      "resp": {
+        "len": 2,
+        "cap": 1024
+      }
+    }
+  }
+}

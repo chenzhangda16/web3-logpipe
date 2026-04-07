@@ -54,10 +54,6 @@ type AccessorStep struct {
 	MapKey   string
 }
 
-type MapKeyProvider interface {
-	KeysFor(path []string, mt reflect.Type) []string
-}
-
 type StaticMapKeyProvider struct {
 	Exact map[string][]string
 }
@@ -72,11 +68,21 @@ func (p StaticMapKeyProvider) KeysFor(path []string, mt reflect.Type) []string {
 	return out
 }
 
-func BuildSchemaTreeWithKeys(sample any, ovs OverrideSet, mkp MapKeyProvider) (*Node, []*Leaf, error) {
+func BuildSchemaTreeWithKeys(sample any, ovs OverrideSet) (*Node, []*Leaf, error) {
 	t := reflect.TypeOf(sample)
+	v := reflect.ValueOf(sample)
+
 	for t.Kind() == reflect.Pointer {
 		t = t.Elem()
+		if v.IsValid() && v.Kind() == reflect.Pointer {
+			if v.IsNil() {
+				v = reflect.Value{}
+			} else {
+				v = v.Elem()
+			}
+		}
 	}
+
 	if t.Kind() != reflect.Struct {
 		return nil, nil, fmt.Errorf("BuildSchemaTree expects struct root, got %v", t.Kind())
 	}
@@ -89,7 +95,7 @@ func BuildSchemaTreeWithKeys(sample any, ovs OverrideSet, mkp MapKeyProvider) (*
 	}
 
 	var leaves []*Leaf
-	if err := expandStructNode(root, t, nil, nil, &leaves, ovs, mkp); err != nil {
+	if err := expandStructNode(root, t, v, nil, nil, &leaves, ovs); err != nil {
 		return nil, nil, err
 	}
 	for i, lf := range leaves {
@@ -101,11 +107,11 @@ func BuildSchemaTreeWithKeys(sample any, ovs OverrideSet, mkp MapKeyProvider) (*
 func expandStructNode(
 	parent *Node,
 	t reflect.Type,
+	sampleVal reflect.Value,
 	path []string,
 	accessor []AccessorStep,
 	leaves *[]*Leaf,
 	ovs OverrideSet,
-	mkp MapKeyProvider,
 ) error {
 	for i := 0; i < t.NumField(); i++ {
 		f := t.Field(i)
@@ -125,6 +131,14 @@ func expandStructNode(
 			FieldIdx: i,
 		})
 
+		fieldSample := invalidValue()
+		if sampleVal.IsValid() {
+			sv := indirectValue(sampleVal)
+			if sv.IsValid() && sv.Kind() == reflect.Struct && i < sv.NumField() {
+				fieldSample = sv.Field(i)
+			}
+		}
+
 		if ft.Kind() == reflect.Map && ft.Key().Kind() == reflect.String {
 			child := &Node{
 				Name: name,
@@ -134,7 +148,7 @@ func expandStructNode(
 			}
 			parent.Children = append(parent.Children, child)
 
-			if err := expandMapNode(child, ft, childPath, childAccessor, leaves, ovs, mkp); err != nil {
+			if err := expandMapNode(child, ft, fieldSample, childPath, childAccessor, leaves, ovs); err != nil {
 				return err
 			}
 			continue
@@ -150,7 +164,7 @@ func expandStructNode(
 			}
 			parent.Children = append(parent.Children, child)
 
-			if err := expandStructNode(child, ft, childPath, childAccessor, leaves, ovs, mkp); err != nil {
+			if err := expandStructNode(child, ft, fieldSample, childPath, childAccessor, leaves, ovs); err != nil {
 				return err
 			}
 
@@ -176,14 +190,16 @@ func expandStructNode(
 func expandMapNode(
 	parent *Node,
 	mt reflect.Type,
+	sampleVal reflect.Value,
 	path []string,
 	accessor []AccessorStep,
 	leaves *[]*Leaf,
 	ovs OverrideSet,
-	mkp MapKeyProvider,
 ) error {
 	elem := indirectType(mt.Elem())
-	keys := nilKeys(mkp, path, mt)
+
+	keys := mapKeysFromSample(sampleVal)
+
 	sort.Strings(keys)
 
 	for _, k := range keys {
@@ -192,6 +208,14 @@ func expandMapNode(
 			Kind:   AccessorMapKey,
 			MapKey: k,
 		})
+
+		var childSample reflect.Value
+		if mv := indirectValue(sampleVal); mv.IsValid() && mv.Kind() == reflect.Map {
+			got := mv.MapIndex(reflect.ValueOf(k))
+			if got.IsValid() {
+				childSample = got
+			}
+		}
 
 		if elem.Kind() == reflect.Map && elem.Key().Kind() == reflect.String {
 			child := &Node{
@@ -202,7 +226,7 @@ func expandMapNode(
 			}
 			parent.Children = append(parent.Children, child)
 
-			if err := expandMapNode(child, elem, keyPath, keyAccessor, leaves, ovs, mkp); err != nil {
+			if err := expandMapNode(child, elem, childSample, keyPath, keyAccessor, leaves, ovs); err != nil {
 				return err
 			}
 			continue
@@ -218,7 +242,7 @@ func expandMapNode(
 			}
 			parent.Children = append(parent.Children, child)
 
-			if err := expandStructNode(child, elem, keyPath, keyAccessor, leaves, ovs, mkp); err != nil {
+			if err := expandStructNode(child, elem, childSample, keyPath, keyAccessor, leaves, ovs); err != nil {
 				return err
 			}
 
@@ -323,30 +347,36 @@ func ResolveLeafValue(root reflect.Value, leaf *Leaf) reflect.Value {
 	return v
 }
 
-func ProcMapKeyProvider() StaticMapKeyProvider {
-	return StaticMapKeyProvider{
-		Exact: map[string][]string{
-			"core.w":         {"0", "1", "2", "3"},
-			"flow.q.win":     {"0", "1", "2", "3"},
-			"flow.winmove.w": {"0", "1", "2", "3"},
-			"flow.wins":      {"0", "1", "2", "3"},
-		},
-	}
-}
-
-func FetchMapKeyProvider() MapKeyProvider {
-	return nil
-}
-
 func PathKey(path []string) string {
 	return strings.Join(path, ".")
 }
 
-func nilKeys(mkp MapKeyProvider, path []string, mt reflect.Type) []string {
-	if mkp == nil {
+func mapKeysFromSample(v reflect.Value) []string {
+	v = indirectValue(v)
+	if !v.IsValid() || v.Kind() != reflect.Map || v.Type().Key().Kind() != reflect.String {
 		return nil
 	}
-	return mkp.KeysFor(path, mt)
+
+	keys := v.MapKeys()
+	out := make([]string, 0, len(keys))
+	for _, k := range keys {
+		out = append(out, k.String())
+	}
+	return out
+}
+
+func invalidValue() reflect.Value {
+	return reflect.Value{}
+}
+
+func indirectValue(v reflect.Value) reflect.Value {
+	for v.IsValid() && v.Kind() == reflect.Pointer {
+		if v.IsNil() {
+			return reflect.Value{}
+		}
+		v = v.Elem()
+	}
+	return v
 }
 
 func appendCopy[T any](base []T, more ...T) []T {
@@ -430,6 +460,8 @@ func defaultWidthForTypeAndPath(t reflect.Type, path []string) int {
 		return 12
 	case "tick":
 		return 6
+	case "ts_ms":
+		return 13
 	case "phase":
 		return 6
 	case "iface":

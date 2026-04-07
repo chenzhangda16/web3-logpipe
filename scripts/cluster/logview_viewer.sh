@@ -53,10 +53,11 @@ viewer_schema_for_service() {
 run_single() {
   local service="${1:?service required}"
   local fifo="${2:?fifo required}"
-  local bin schema
+  local bin schema sample
 
   bin="$(logview_bin_path)"
   schema="$(viewer_schema_for_service "$service")"
+  sample="$(logview_sample_path "$schema")"
 
   [[ -x "$bin" ]] || {
     echo "[viewer] binary not found or not executable: $bin" >&2
@@ -71,7 +72,7 @@ run_single() {
   while true; do
     resume_after_int=0
 
-    "$bin" --fifo "$fifo" --schema "$schema" &
+    "$bin" --fifo "$fifo" --schema "$schema" --sample "$sample" &
     viewer_pid=$!
 
     set +e

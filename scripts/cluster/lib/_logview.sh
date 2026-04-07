@@ -11,17 +11,59 @@ logview_bin_path() {
   printf '%s/bin/cluster/logview' "$(get_root_dir)"
 }
 
-logview_build_log_path() {
-  printf '%s/logview.build.latest.log' "$(logview_log_root)"
+logview_log_key() {
+  local service="${1:-}"
+  if [[ -n "$service" ]]; then
+    printf 'logview.%s' "$service"
+  else
+    printf 'logview'
+  fi
+}
+
+logview_latest_log() {
+  local service="${1:-}"
+  printf '%s/%s.latest.log' "$(logview_log_root)" "$(logview_log_key "$service")"
+}
+
+logview_latest_stamp() {
+  local service="${1:-}"
+  printf '%s/%s.latest.stamp' "$(logview_log_root)" "$(logview_log_key "$service")"
+}
+
+logview_history_log() {
+  local stamp="${1:?stamp required}"
+  local service="${2:-}"
+  printf '%s/%s.%s.log' "$(logview_log_root)" "$(logview_log_key "$service")" "$stamp"
+}
+
+prepare_logview_logs() {
+  local service="${1:-}"
+  local latest_log latest_stamp old_stamp hist_log new_stamp
+  latest_log="$(logview_latest_log "$service")"
+  latest_stamp="$(logview_latest_stamp "$service")"
+
+  ensure_logview_dirs
+
+  if [[ -s "$latest_log" && -f "$latest_stamp" ]]; then
+    old_stamp="$(cat "$latest_stamp" 2>/dev/null || true)"
+    if [[ -n "$old_stamp" ]]; then
+      hist_log="$(logview_history_log "$old_stamp" "$service")"
+      cp "$latest_log" "$hist_log"
+    fi
+  fi
+
+  new_stamp="$(date '+%Y%m%d_%H%M%S')"
+  printf '%s\n' "$new_stamp" > "$latest_stamp"
+  : > "$latest_log"
 }
 
 build_logview_binary() {
   local root bin log_file
   root="$(get_root_dir)"
   bin="$(logview_bin_path)"
-  log_file="$(logview_build_log_path)"
+  log_file="$(logview_latest_log)"
 
-  ensure_logview_dirs
+  prepare_logview_logs ""
   mkdir -p "$(dirname "$bin")"
 
   printf '[logview] building %s -> %s\n' "$root/cmd/logview" "$bin" >>"$log_file"
@@ -54,6 +96,15 @@ logview_tmp_root() {
 
 logview_log_root() {
   printf '%s/logs/cluster' "$(get_root_dir)"
+}
+
+logview_sample_root() {
+  printf '%s/config/logview' "$(get_root_dir)"
+}
+
+logview_sample_path() {
+  local schema="${1:?schema required}"
+  printf '%s/%s.sample.json' "$(logview_sample_root)" "$schema"
 }
 
 logview_dispatch_pid_file() {
@@ -90,6 +141,7 @@ ensure_logview_dirs() {
   mkdir -p "$(logview_mode_root)"
   mkdir -p "$(logview_tmp_root)"
   mkdir -p "$(logview_log_root)"
+  mkdir -p "$(logview_sample_root)"
 }
 
 prepare_logview_dispatch_logs() {

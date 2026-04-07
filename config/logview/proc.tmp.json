@@ -1,0 +1,164 @@
+{
+    "tag": "processor",
+    "tick": 1,
+    "ts_ms": 1775275344016,
+    "core": {
+        "cpu_pct": 0,
+        "gomaxprocs": 32,
+        "goroutines": 39,
+        "w": {
+            "0": {
+                "busy_pct": 0,
+                "work_core_s": 0,
+                "wait_core_s": 0,
+                "moves": 0
+            },
+            "1": {
+                "busy_pct": 0,
+                "work_core_s": 0,
+                "wait_core_s": 0,
+                "moves": 0
+            },
+            "2": {
+                "busy_pct": 0,
+                "work_core_s": 0,
+                "wait_core_s": 0,
+                "moves": 0
+            },
+            "3": {
+                "busy_pct": 39.5064503,
+                "work_core_s": 0.395064503,
+                "wait_core_s": 3.580722922,
+                "moves": 4904
+            }
+        }
+    },
+    "wire": {
+        "iface": "eth3",
+        "rx_bps": 0,
+        "tx_bps": 0,
+        "rx_pct": 0,
+        "tx_pct": 0
+    },
+    "flow": {
+        "phase": "cold",
+        "re_off": 5954,
+        "blk": 827141,
+        "msg_ps": 6210,
+        "msgs": 6210,
+        "spool": {
+            "ok": 6210,
+            "err": 0,
+            "avg_ns": 40263,
+            "max_ns": 15118107
+        },
+        "decode": {
+            "ok": 5955,
+            "err": 0,
+            "avg_ns": 188574,
+            "p50_ns": 182637,
+            "p90_ns": 244413,
+            "p99_ns": 413649,
+            "max_ns": 674848
+        },
+        "raw_send_block": {
+            "ev": 6210,
+            "sum_ns": 826142,
+            "avg_ns": 133,
+            "max_ns": 60708
+        },
+        "winmove": {
+            "n": 5948,
+            "block": {
+                "ev": 0,
+                "sum_ns": 0,
+                "avg_ns": 0,
+                "max_ns": 0
+            },
+            "w": {
+                "0": {
+                    "ev": 0,
+                    "sum_ns": 0,
+                    "avg_ns": 0,
+                    "max_ns": 0
+                },
+                "1": {
+                    "ev": 0,
+                    "sum_ns": 0,
+                    "avg_ns": 0,
+                    "max_ns": 0
+                },
+                "2": {
+                    "ev": 0,
+                    "sum_ns": 0,
+                    "avg_ns": 0,
+                    "max_ns": 0
+                },
+                "3": {
+                    "ev": 5951,
+                    "sum_ns": 2122509,
+                    "avg_ns": 356,
+                    "max_ns": 97695
+                }
+            }
+        },
+        "q": {
+            "raw": {
+                "len": 0,
+                "cap": 0
+            },
+            "win": {
+                "0": {
+                    "len": 0,
+                    "cap": 0
+                },
+                "1": {
+                    "len": 0,
+                    "cap": 0
+                },
+                "2": {
+                    "len": 0,
+                    "cap": 0
+                },
+                "3": {
+                    "len": 0,
+                    "cap": 0
+                }
+            }
+        },
+        "wins": {
+            "0": {
+                "busy_pct": 0,
+                "moves": 0,
+                "avg_wait_ns": 0,
+                "avg_work_ns": 0,
+                "max_wait_ns": 0,
+                "max_work_ns": 0
+            },
+            "1": {
+                "busy_pct": 0,
+                "moves": 0,
+                "avg_wait_ns": 0,
+                "avg_work_ns": 0,
+                "max_wait_ns": 0,
+                "max_work_ns": 0
+            },
+            "2": {
+                "busy_pct": 0,
+                "moves": 0,
+                "avg_wait_ns": 0,
+                "avg_work_ns": 0,
+                "max_wait_ns": 0,
+                "max_work_ns": 0
+            },
+            "3": {
+                "busy_pct": 39.5064503,
+                "moves": 4904,
+                "avg_wait_ns": 730163,
+                "avg_work_ns": 80559,
+                "max_wait_ns": 3379128903,
+                "max_work_ns": 1483726
+            }
+        }
+    }
+}

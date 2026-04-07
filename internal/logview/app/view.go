@@ -53,7 +53,12 @@ func (m Model[T]) View() string {
 	if contentWidth < 0 {
 		contentWidth = 0
 	}
-	bodyWithScrollbar := joinBodyWithScrollbar(bodyLines, scrollCol, contentWidth)
+	bodyWithScrollbar := joinBodyWithScrollbar(
+		bodyLines,
+		scrollCol,
+		contentWidth,
+		m.scrollbarGapWidth(),
+	)
 	lines = append(lines, bodyWithScrollbar...)
 
 	// 状态栏固定底部

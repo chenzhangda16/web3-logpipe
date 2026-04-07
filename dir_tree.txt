@@ -1,6 +1,10 @@
 web3-logpipe/
   cmd/
+    bt-freeze-demo/
+      main.go
     fetcher/
+      main.go
+    logview/
       main.go
     mockchain/
       main.go
@@ -11,16 +15,60 @@ web3-logpipe/
     writer/
       main.go
   data/
-    pids/
-      logpipe.pids
-    ready/
+    cluster/
+      pids/
+        logpipe.pids
+        logs_cluster_fetcher.latest.log.state
+        logs_cluster_mockchain.latest.log.state
+        logs_cluster_processor.latest.log.state
+        logs_cluster_writer.latest.log.state
+      stderr/
+        logs_cluster_fetcher.latest.log.err.log
+        logs_cluster_mockchain.latest.log.err.log
+        logs_cluster_processor.latest.log.err.log
+        logs_cluster_writer.latest.log.err.log
+    local/
+      mockchain.db/
+        000063.sst
+        000082.sst
+        000085.sst
+        000086.log
+        000088.sst
+        000089.sst
+        000091.sst
+        000094.sst
+        000096.sst
+        000097.sst
+        000098.sst
+        000099.sst
+        000100.sst
+        000101.sst
+        000102.sst
+        000103.sst
+        000104.sst
+        CURRENT
+        IDENTITY
+        LOCK
+        LOG
+        MANIFEST-000008
+        OPTIONS-000005
+      pids/
+        kafka.pid
+        kafka_tail.pid
+        logpipe.pids
+        postgres_tail.pid
+      stderr/
   internal/
     logpipe/
       bench/
+        corejson.go
         fetchbench.go
+        fetchjson.go
         procbench.go
+        procjson.go
         stats.go
         types.go
+        wirejson.go
       dispatcher/
         dispatcher.go
       event/
@@ -48,6 +96,9 @@ web3-logpipe/
         fifo.go
       retry/
         retry.go
+      sysstat/
+        cpu.go
+        net.go
       window/
         queue.go
         runner.go
@@ -56,6 +107,30 @@ web3-logpipe/
       writer/
         pgwriter.go
         schema.sql
+    logview/
+      app/
+        hold.go
+        model.go
+        msg.go
+        render_row.go
+        scrollbar.go
+        status.go
+        update.go
+        view.go
+      render/
+        format.go
+        style.go
+      schema/
+        header.go
+        layout.go
+        override.go
+        README.md
+        schema.go
+      source/
+        fifo.go
+        source.go
+      store/
+        rowstore.go
     mockchain/
       generator/
         addrs.go
@@ -72,11 +147,67 @@ web3-logpipe/
         keys.go
         rocks.go
   logs/
-    local/
-      run.20260306_213628.log
-      run.20260306_213707.log
-      run.20260306_214151.log
+    cluster/
+      dispatch.20260326_143056.log
+      dispatch.20260402_165317.log
+      dispatch.latest.log
+      dispatch.latest.stamp
+      fetcher.latest.log
+      logview.build.latest.log
+      mockchain.latest.log
+      processor.20260326_143101.log
+      processor.20260402_165349.log
+      processor.latest.log
+      processor.latest.stamp
+      reset.20260402_170011.log
+      reset.20260402_175017.log
+      reset.latest.log
+      run.20260318_221740.log
+      run.console.20260326_143056.log
+      run.console.20260402_165317.log
+      run.console.20260402_174828.log
       run.latest.log
+      run.start.20260326_143056.log
+      run.start.20260402_165317.log
+      run.start.20260402_174828.log
+      writer.latest.log
+    local/
+      controller.log
+      controller.log.2026-03-12-17
+      fetcher.20260312_170713.log
+      fetcher.latest.log
+      kafka-authorizer.log
+      kafka-request.log
+      kafka.20260315_114451.log
+      kafka.latest.log
+      kafkaServer-gc.log
+      kafkaServer-gc.log.0
+      kafkaServer-gc.log.1
+      log-cleaner.log
+      log-cleaner.log.2026-03-12-17
+      mockchain.20260312_170713.log
+      mockchain.latest.log
+      postgres.20260312_170702.log
+      postgres.20260315_114447.log
+      postgres.latest.log
+      processor.20260312_170713.log
+      processor.latest.log
+      reset.20260312_170825.log
+      reset.20260312_170917.log
+      reset.20260312_171944.log
+      reset.20260312_172055.log
+      reset.20260312_173519.log
+      reset.20260315_114448.log
+      reset.latest.log
+      run.20260312_170701.log
+      run.20260315_114446.log
+      run.latest.log
+      server.log
+      server.log.2026-03-12-17
+      state-change.log
+      state-change.log.2026-03-12-17
+      writer.20260312_170713.log
+      writer.latest.log
   pkg/
     hash/
       builder.go
@@ -84,22 +215,62 @@ web3-logpipe/
     rng/
       factory.go
   scripts/
-    data/
-      pids/
-        logpipe.pids
-      ready/
-    local/
+    cluster/
+      lib/
+        _cluster_ctl.sh
+        _component_stream.sh
+        _logview.sh
+      drop_pg_db.sh
       ensure_kafka.sh
       ensure_pg.sh
       factory_reset.sh
-      kill_all.sh
+      kill_service.sh
       logpipe.sh
-      rpcbench.sh
-      stop_infra.sh
+      logtail.sh
+      logtail_supervise.sh
+      logview.sh
+      logview_dispatch.sh
+      logview_viewer.sh
+      reset_kafka_storage.sh
+      reset_node_data.sh
+      start_fetcher.sh
+      start_mockchain.sh
+      start_processor.sh
+      start_writer.sh
       stop_kafka.sh
       stop_pg.sh
+      wait_ready_fifo.sh
+    data/
+      cluster/
+        pids/
+          dispatcher.pid
+    env/
+      cluster.env
+      common.env
+      local.env
+    lib/
+      _bootstrap.sh
+      _env.sh
+      _path.sh
+    local/
+      experimental/
+        kill_all.sh
+        rpcbench.sh
+        stop_infra.sh
+        stop_kafka.sh
+        stop_pg.sh
+      ensure_kafka.sh
+      ensure_pg.sh
+      factory_reset.sh
+      logpipe.sh
     logs/
-      local/
+      cluster/
+        dispatch.latest.log
+        dispatch.latest.stamp
+    tmp/
+      logview/
+    cluster_start.sh
+    cluster_stop.sh
     local_start.sh
     local_stop.sh
   test_tools/
@@ -113,10 +284,15 @@ web3-logpipe/
     shell/
       test1.sh
       test2.sh
+  tmp/
+    logview/
   .gitignore
   dir_tree.txt
   go.mod
   go.sum
   hs_err_pid26521.log
+  nohup.out
   README.md
+  test.json
+  test_file.log
   toggle_branch.sh

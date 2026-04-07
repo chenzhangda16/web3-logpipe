@@ -9,25 +9,30 @@ import (
 )
 
 func (m *Model[T]) renderRowGeneric(row T) string {
-	rv := reflect.ValueOf(row)
+	flat := schema.FlattenRow(row)
 	cells := make([]string, 0, len(m.schemaLeaves))
 
 	for _, lf := range m.schemaLeaves {
-		val := schema.ResolveLeafValue(rv, lf)
+		raw, ok := flat[lf.PathKey]
 
-		var raw any
 		s := ""
-
-		if val.IsValid() {
-			raw = val.Interface()
-			s = lf.Format(val)
+		if ok {
+			s = formatLeafRaw(lf, raw)
 		}
+
+		s = render.PadCell(s, lf.Width, lf.Align)
 
 		style := m.styler.Style(lf.PathKey, raw)
 		s = style.Render(s)
 
-		cells = append(cells, render.PadCell(s, lf.Width, lf.Align))
+		cells = append(cells, s)
 	}
-
 	return strings.Join(cells, " ")
+}
+
+func formatLeafRaw(lf *schema.Leaf, raw any) string {
+	if raw == nil {
+		return ""
+	}
+	return lf.Format(reflect.ValueOf(raw))
 }

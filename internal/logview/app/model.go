@@ -2,7 +2,9 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"os"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/chenzhangda16/web3-logpipe/internal/logview/render"
@@ -14,8 +16,9 @@ import (
 )
 
 type Config struct {
-	FIFOPath string
-	Schema   string
+	FIFOPath   string
+	Schema     string
+	SamplePath string
 }
 
 type Model[T any] struct {
@@ -53,18 +56,38 @@ type Model[T any] struct {
 	rowTick func(T) int64
 }
 
+func loadSchemaSample[T any](path string, zero T) (T, error) {
+	if path == "" {
+		return zero, nil
+	}
+
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return zero, fmt.Errorf("read sample file: %w", err)
+	}
+
+	v := zero
+	if err := json.Unmarshal(b, &v); err != nil {
+		return zero, fmt.Errorf("unmarshal sample file: %w", err)
+	}
+	return v, nil
+}
+
 func newModel[T any](
 	cfg Config,
-	sample T,
-	mapKeyProvider schema.MapKeyProvider,
+	zero T,
 	readFn func(context.Context, string, chan<- T) error,
 	rowTsMs func(T) int64,
 	rowTick func(T) int64,
 ) (Model[T], error) {
+	schemaSample, err := loadSchemaSample(cfg.SamplePath, zero)
+	if err != nil {
+		return Model[T]{}, err
+	}
+
 	root, leaves, err := schema.BuildSchemaTreeWithKeys(
-		sample,
+		schemaSample,
 		schema.DefaultOverrideSet(),
-		mapKeyProvider,
 	)
 	if err != nil {
 		return Model[T]{}, err
@@ -114,7 +137,6 @@ func NewModel(cfg Config) (tea.Model, error) {
 		return newModel(
 			cfg,
 			bench.ProcJson{},
-			schema.ProcMapKeyProvider(),
 			source.ReadJSON[bench.ProcJson],
 			func(v bench.ProcJson) int64 { return v.TsMs },
 			func(v bench.ProcJson) int64 { return v.Tick },
@@ -124,7 +146,6 @@ func NewModel(cfg Config) (tea.Model, error) {
 		return newModel(
 			cfg,
 			bench.FetchJson{},
-			schema.FetchMapKeyProvider(),
 			source.ReadJSON[bench.FetchJson],
 			func(v bench.FetchJson) int64 { return v.TsMs },
 			func(v bench.FetchJson) int64 { return v.Tick },
@@ -250,8 +271,13 @@ func (m *Model[T]) scrollbarWidth() int {
 	return 1
 }
 
+func (m *Model[T]) scrollbarGapWidth() int {
+	return 1
+}
+
 func (m *Model[T]) bodyContentWidth() int {
-	w := m.width - m.scrollbarWidth()
+	w := m.width - m.scrollbarGapWidth() - m.scrollbarWidth()
+	//w := m.width - m.scrollbarWidth()
 	if w < 0 {
 		return 0
 	}
@@ -262,8 +288,10 @@ func (m *Model[T]) scrollbarXRange() (startX, endX int) {
 	if m.width <= 0 {
 		return -1, -1
 	}
+
 	endX = m.width - 1
-	startX = endX - m.scrollbarWidth() + 1
+	startX = m.width - m.scrollbarWidth()
+
 	if startX < 0 {
 		startX = 0
 	}

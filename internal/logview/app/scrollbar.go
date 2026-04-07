@@ -114,10 +114,15 @@ func scrollbarStyles(hovered bool) (trackStyle, thumbStyle, topHotStyle, bottomH
 			Foreground(lipgloss.Color("244"))
 }
 
-func joinBodyWithScrollbar(bodyLines []string, scrollCol []string, contentWidth int) []string {
+func joinBodyWithScrollbar(bodyLines []string, scrollCol []string, contentWidth int, gapWidth int) []string {
 	n := len(bodyLines)
 	if len(scrollCol) > n {
 		n = len(scrollCol)
+	}
+
+	gap := ""
+	if gapWidth > 0 {
+		gap = strings.Repeat(" ", gapWidth)
 	}
 
 	out := make([]string, 0, n)
@@ -126,14 +131,20 @@ func joinBodyWithScrollbar(bodyLines []string, scrollCol []string, contentWidth 
 		if i < len(bodyLines) {
 			left = bodyLines[i]
 		}
+
 		if contentWidth > 0 {
+			left = clipRightDisplay(left, contentWidth)
 			left = padRightDisplay(left, contentWidth)
+		} else {
+			left = ""
 		}
+
 		sb := " "
 		if i < len(scrollCol) {
 			sb = scrollCol[i]
 		}
-		out = append(out, left+sb)
+
+		out = append(out, left+gap+sb)
 	}
 	return out
 }
@@ -144,6 +155,51 @@ func padRightDisplay(s string, width int) string {
 		return s
 	}
 	return s + strings.Repeat(" ", width-w)
+}
+
+func clipRightDisplay(s string, width int) string {
+	if width <= 0 || s == "" {
+		return ""
+	}
+	if lipgloss.Width(s) <= width {
+		return s
+	}
+
+	rs := []rune(s)
+	var b strings.Builder
+	displayW := 0
+
+	inEscape := false
+	for i := 0; i < len(rs); i++ {
+		r := rs[i]
+
+		// ANSI escape 开始
+		if r == '\x1b' {
+			inEscape = true
+			b.WriteRune(r)
+			continue
+		}
+
+		if inEscape {
+			b.WriteRune(r)
+			// CSI 序列通常以字母结尾，如 m
+			if (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') {
+				inEscape = false
+			}
+			continue
+		}
+
+		rw := lipgloss.Width(string(r))
+		if displayW+rw > width {
+			break
+		}
+
+		b.WriteRune(r)
+		displayW += rw
+	}
+
+	// 避免颜色泄漏到后面 scrollbar
+	return b.String() + "\x1b[0m"
 }
 
 func (sm scrollbarMetrics) topHotRows() int {

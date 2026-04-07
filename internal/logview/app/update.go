@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"log"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -14,6 +15,7 @@ const (
 func (m Model[T]) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
+		log.Printf("[winsize] fifo=%s width=%d height=%d", m.fifoPath, msg.Width, msg.Height)
 		m.width = msg.Width
 		m.height = msg.Height
 		if m.follow {

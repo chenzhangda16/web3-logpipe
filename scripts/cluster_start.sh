@@ -17,6 +17,7 @@ TS="$(date '+%Y%m%d_%H%M%S')"
 # DO NOT truncate it here, otherwise previous latest content cannot be copied
 # into the timestamped history log during processor startup.
 : > "./logs/$MODE/writer.latest.log"
+: > "./logs/$MODE/logview.latest.log"
 
 # 停旧
 ./scripts/$MODE/logview.sh stop >/dev/null 2>&1 || true

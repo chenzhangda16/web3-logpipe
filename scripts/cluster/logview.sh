@@ -64,11 +64,14 @@ ensure_tmux_session_single() {
   local session="${1:?session required}"
   local service="${2:?service required}"
   local log_file
-  log_file="$(logview_dispatch_latest_log)"
+
+  log_file="$(logview_latest_log "$service")"
 
   if tmux_has_session "$session"; then
     return 0
   fi
+
+  prepare_logview_logs "$service"
 
   tmux new-session -d -s "$session" -n "$LOGVIEW_WINDOW" \
     "bash -lc '$(viewer_cmd_single "$service")' 2>>'$log_file'"
@@ -77,11 +80,13 @@ ensure_tmux_session_single() {
 ensure_tmux_session_merge() {
   local session="${1:?session required}"
   local log_file
-  log_file="$(logview_dispatch_latest_log)"
+  log_file="$(logview_latest_log "")"
 
   if tmux_has_session "$session"; then
     return 0
   fi
+
+  prepare_logview_logs ""
 
   tmux new-session -d -s "$session" -n "$LOGVIEW_WINDOW" \
     "bash -lc '$(viewer_cmd_merge)' 2>>'$log_file'"
