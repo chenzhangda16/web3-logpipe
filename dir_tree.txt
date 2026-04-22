@@ -4,6 +4,8 @@ web3-logpipe/
       main.go
     fetcher/
       main.go
+    layer-priority-demo/
+      main.go
     logview/
       main.go
     mockchain/
@@ -14,6 +16,11 @@ web3-logpipe/
       main.go
     writer/
       main.go
+  config/
+    logview/
+      fetch.sample.json
+      proc.sample.json
+      proc.tmp.json
   data/
     cluster/
       pids/
@@ -91,7 +98,6 @@ web3-logpipe/
       processor/
         consumer.go
         processor.go
-        window.go
       ready/
         fifo.go
       retry/
@@ -121,6 +127,7 @@ web3-logpipe/
         format.go
         style.go
       schema/
+        flatten.go
         header.go
         layout.go
         override.go
@@ -150,26 +157,136 @@ web3-logpipe/
     cluster/
       dispatch.20260326_143056.log
       dispatch.20260402_165317.log
+      dispatch.20260402_174828.log
+      dispatch.20260402_184401.log
+      dispatch.20260402_224807.log
+      dispatch.20260403_173139.log
+      dispatch.20260403_223521.log
+      dispatch.20260403_224047.log
+      dispatch.20260403_225125.log
+      dispatch.20260404_120142.log
+      dispatch.20260404_152414.log
+      dispatch.20260404_152621.log
+      dispatch.20260404_160545.log
+      dispatch.20260404_163818.log
+      dispatch.20260404_165201.log
+      dispatch.20260404_171717.log
+      dispatch.20260404_172133.log
+      dispatch.20260404_172612.log
+      dispatch.20260404_175238.log
+      dispatch.20260404_180743.log
       dispatch.latest.log
       dispatch.latest.stamp
       fetcher.latest.log
-      logview.build.latest.log
+      logview.fetcher.20260403_223521.log
+      logview.fetcher.20260403_224048.log
+      logview.fetcher.20260404_120143.log
+      logview.fetcher.20260404_152414.log
+      logview.fetcher.20260404_152622.log
+      logview.fetcher.20260404_175238.log
+      logview.fetcher.20260404_180743.log
+      logview.fetcher.latest.log
+      logview.fetcher.latest.stamp
+      logview.latest.log
+      logview.latest.stamp
+      logview.processor.20260403_223521.log
+      logview.processor.20260403_224048.log
+      logview.processor.20260404_120143.log
+      logview.processor.20260404_152414.log
+      logview.processor.20260404_152622.log
+      logview.processor.20260404_175238.log
+      logview.processor.20260404_180743.log
+      logview.processor.latest.log
+      logview.processor.latest.stamp
       mockchain.latest.log
       processor.20260326_143101.log
       processor.20260402_165349.log
+      processor.20260402_174833.log
+      processor.20260402_184408.log
+      processor.20260402_224812.log
+      processor.20260403_173158.log
+      processor.20260403_223525.log
+      processor.20260403_224052.log
+      processor.20260403_225129.log
+      processor.20260404_120201.log
+      processor.20260404_152419.log
+      processor.20260404_152625.log
+      processor.20260404_160550.log
+      processor.20260404_163822.log
+      processor.20260404_165206.log
+      processor.20260404_171722.log
+      processor.20260404_172137.log
+      processor.20260404_172616.log
+      processor.20260404_175242.log
+      processor.20260404_180747.log
       processor.latest.log
       processor.latest.stamp
       reset.20260402_170011.log
       reset.20260402_175017.log
+      reset.20260402_184552.log
+      reset.20260402_224933.log
+      reset.20260403_173446.log
+      reset.20260403_223654.log
+      reset.20260403_224250.log
+      reset.20260403_225226.log
+      reset.20260404_120230.log
+      reset.20260404_152447.log
+      reset.20260404_152607.log
+      reset.20260404_152649.log
+      reset.20260404_162835.log
+      reset.20260404_165117.log
+      reset.20260404_165645.log
+      reset.20260404_172112.log
+      reset.20260404_172334.log
+      reset.20260404_174957.log
+      reset.20260404_180703.log
+      reset.20260404_183755.log
+      reset.20260404_210906.log
       reset.latest.log
       run.20260318_221740.log
       run.console.20260326_143056.log
       run.console.20260402_165317.log
       run.console.20260402_174828.log
+      run.console.20260402_184401.log
+      run.console.20260402_224807.log
+      run.console.20260403_173139.log
+      run.console.20260403_223521.log
+      run.console.20260403_224047.log
+      run.console.20260403_225124.log
+      run.console.20260404_120142.log
+      run.console.20260404_152414.log
+      run.console.20260404_152621.log
+      run.console.20260404_160545.log
+      run.console.20260404_163817.log
+      run.console.20260404_165201.log
+      run.console.20260404_171717.log
+      run.console.20260404_172133.log
+      run.console.20260404_172612.log
+      run.console.20260404_175237.log
+      run.console.20260404_180743.log
+      run.console.20260404_201857.log
       run.latest.log
       run.start.20260326_143056.log
       run.start.20260402_165317.log
       run.start.20260402_174828.log
+      run.start.20260402_184401.log
+      run.start.20260402_224807.log
+      run.start.20260403_173139.log
+      run.start.20260403_223521.log
+      run.start.20260403_224047.log
+      run.start.20260403_225124.log
+      run.start.20260404_120142.log
+      run.start.20260404_152414.log
+      run.start.20260404_152621.log
+      run.start.20260404_160545.log
+      run.start.20260404_163817.log
+      run.start.20260404_165201.log
+      run.start.20260404_171717.log
+      run.start.20260404_172133.log
+      run.start.20260404_172612.log
+      run.start.20260404_175237.log
+      run.start.20260404_180743.log
+      run.start.20260404_201857.log
       writer.latest.log
     local/
       controller.log
@@ -287,6 +404,7 @@ web3-logpipe/
   tmp/
     logview/
   .gitignore
+  code.tar.gz
   dir_tree.txt
   go.mod
   go.sum
@@ -295,4 +413,6 @@ web3-logpipe/
   README.md
   test.json
   test_file.log
+  tmp_flatten_check.go
   toggle_branch.sh
+  web3-logpipe-src.tar.gz
